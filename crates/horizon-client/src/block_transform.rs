@@ -117,7 +117,9 @@ fn provider(value: &Value, registry: &BlockRegistry) -> Option<Provider> {
 }
 
 /// `BlockState.withPropertiesOf`: the properties both blocks have.
-fn with_properties_of(
+/// `state` with the properties of `old` it also has (a stripped log keeps its
+/// `axis`), where they make a state of the registry.
+pub fn with_properties_of(
     registry: &BlockRegistry,
     mut state: BlockState,
     old: &BlockState,

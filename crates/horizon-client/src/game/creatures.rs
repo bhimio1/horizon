@@ -826,6 +826,12 @@ impl Game<'_> {
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
+        // ServerLivingEntityEvents.AFTER_DEATH.
+        let kind = horizon_client::command::args::normalize(&m.kind.id);
+        let cause = m.last_damage.as_ref().map_or("", |(d, _)| {
+            damage_type(d.kind, matches!(d.attacker, Some(Who::Player)))
+        });
+        self.native_mob_death(m.id as i32, &kind, cause);
         // LivingEntity.die: a sleeper gets up, and its bed is free again.
         if let Some(bed) = horizon_client::mobs::villager::sleeping_pos(m) {
             self.wake_villager(m.id);
@@ -1063,6 +1069,10 @@ impl Game<'_> {
     }
     /// Melee or ranged damage to another mob; whether the hit landed.
     fn mob_hits_mob(&mut self, target: u32, amount: f32, source: Damage) -> bool {
+        let amount = self.native_mob_damage(target, &source, amount);
+        if amount <= 0.0 {
+            return false;
+        }
         let mut killed = false;
         let mut hurt = false;
         let mut infested = false;
@@ -2349,6 +2359,12 @@ impl Game<'_> {
         if self.creative || self.combat.refuse_player_hit {
             return false;
         }
+        // ServerLivingEntityEvents.ALLOW_DAMAGE: a mod may change or cancel it.
+        let mut amount = amount;
+        self.native_player_hurt(damage_type, &mut amount);
+        if amount <= 0.0 {
+            return false;
+        }
         let projectile = self
             .res
             .stations()
@@ -2502,6 +2518,11 @@ impl Game<'_> {
     }
     pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
+            return;
+        }
+        let mut amount = amount;
+        self.native_player_hurt(damage_type, &mut amount);
+        if amount <= 0.0 {
             return;
         }
         if let Some(player) = self.player.as_mut()
@@ -3214,11 +3235,15 @@ impl Game<'_> {
                         [p.previous.x, p.previous.y, p.previous.z],
                         "minecraft:trident",
                     ),
-                    Who::Mob(id) => self
-                        .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id)
-                        .is_some_and(|m| m.damage(amount, source)),
+                    Who::Mob(id) => {
+                        let amount = self.native_mob_damage(id, &source, amount);
+                        amount > 0.0
+                            && self
+                                .mobs
+                                .iter_mut()
+                                .find(|m| m.id == id)
+                                .is_some_and(|m| m.damage(amount, source))
+                    }
                 };
                 let outcome = if hurt {
                     EntityHit::Hurt
@@ -3254,11 +3279,13 @@ impl Game<'_> {
                         hurt
                     }
                     Who::Mob(id) => {
-                        let hurt = self
-                            .mobs
-                            .iter_mut()
-                            .find(|m| m.id == id)
-                            .is_some_and(|m| m.damage(amount, source));
+                        let amount = self.native_mob_damage(id, &source, amount);
+                        let hurt = amount > 0.0
+                            && self
+                                .mobs
+                                .iter_mut()
+                                .find(|m| m.id == id)
+                                .is_some_and(|m| m.damage(amount, source));
                         dodged = !hurt
                             && self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
                                 m.species() == Species::Enderman

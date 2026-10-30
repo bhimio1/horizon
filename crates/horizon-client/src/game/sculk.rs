@@ -335,7 +335,9 @@ impl Game<'_> {
             t.dampens[i] = dampening.contains(name);
             t.resonator[i] = resonators.contains(name);
         }
-        self.world.watched = t.kinds.iter().map(|k| *k != 0).collect();
+        // With the states native mods watch (`native_watch_block`).
+        let native = |i: usize| self.native_watched.get(i) == Some(&true);
+        self.world.watched = (0..n).map(|i| t.kinds[i] != 0 || native(i)).collect();
         self.sculk.tables = t;
     }
     fn kind_of_state(&self, state: u32) -> u8 {
@@ -370,6 +372,7 @@ impl Game<'_> {
             let arrived: Vec<(i32, i32)> = loaded.difference(&self.sculk.known).copied().collect();
             for key in arrived {
                 self.sculk_scan_chunk(key);
+                self.native_chunk([key.0, key.1], true);
             }
             // The blocks of every chunk that left, in one pass: a player
             // leaving unloads thousands of chunks at once.
@@ -379,10 +382,18 @@ impl Game<'_> {
                     .index
                     .retain(|p| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
             }
+            for &key in &gone {
+                self.native_chunk([key.0, key.1], false);
+            }
             self.sculk.known = loaded;
         }
         let writes = std::mem::take(&mut self.world.watched_writes);
         for (key, old, new) in writes {
+            let native = |s: u32| self.native_watched.get(s as usize) == Some(&true);
+            if native(old) || native(new) {
+                let pos = [key.0, key.1, key.2];
+                self.native_block_changed(pos, BlockStateId(old), BlockStateId(new));
+            }
             let (old_kind, new_kind) = (self.kind_of_state(old), self.kind_of_state(new));
             if old_kind == new_kind {
                 continue;

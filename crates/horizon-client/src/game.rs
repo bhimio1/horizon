@@ -156,11 +156,14 @@ mod mounts;
 mod moving_pistons;
 mod music;
 mod names;
+mod native_data;
+mod native_events;
 mod native_hooks;
 mod native_lifecycle;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
+mod native_server;
 mod native_shaders;
 mod natural_spawning;
 mod nautili;
@@ -1977,6 +1980,13 @@ struct Game<'a> {
     native_shaders: native_shaders::NativeShaders,
     /// The native lifecycle bookkeeping.
     native_lifecycle: native_lifecycle::NativeLifecycle,
+    /// The states native mods watch (`native_watch_block`), by id.
+    native_watched: Vec<bool>,
+    /// What native mods keep with the world (`native_world_data`).
+    native_data: native_data::NativeData,
+    /// What native mods asked of the network, and what they added to the
+    /// creative tabs.
+    native_events: native_events::NativeEvents,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -4321,6 +4331,13 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        let mut cancel = false;
+        let before = self.world.block(pos[0], pos[1], pos[2]);
+        self.native_before_break(pos, before, &mut cancel);
+        if cancel {
+            // The client's acknowledgement puts its predicted air back.
+            return Ok(());
+        }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -4394,7 +4411,8 @@ impl Game<'_> {
                 if let Some(p) = self.player.as_mut() {
                     p.cause_food_exhaustion(0.005);
                 }
-                let drops = self.block_loot_at(pos, state, held.as_ref());
+                let mut drops = self.block_loot_at(pos, state, held.as_ref());
+                self.native_block_drops(pos, broken, &mut drops);
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
@@ -4461,6 +4479,9 @@ impl Game<'_> {
         }
         self.pending.clear(pos);
         self.process_level_events()?;
+        if removed {
+            self.native_after_break(pos, broken);
+        }
         Ok(())
     }
     /// The hand whose use ended the click, if any.
@@ -4525,6 +4546,14 @@ impl Game<'_> {
     /// `Player.interactOn` for the entity under the crosshair with the
     /// acting hand: whether it took the click.
     fn interact_entity(&mut self) -> Result<bool> {
+        if let Some(Some(entity)) = self.pick_entity_hit() {
+            let mut result = native_server::NativeUse::Pass;
+            let main_hand = self.hand == Hand::Main;
+            self.native_use_entity(entity, main_hand, &mut result);
+            if self.native_use_ends(result) {
+                return Ok(true);
+            }
+        }
         Ok(self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_cushion()
@@ -4560,6 +4589,15 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
+        let mut result = native_server::NativeUse::Pass;
+        let main_hand = self.hand == Hand::Main;
+        match block_hit {
+            Some(hit) => self.native_use_block(hit.pos, hit.face, main_hand, &mut result),
+            None => self.native_use_item(main_hand, &mut result),
+        }
+        if self.native_use_ends(result) {
+            return Ok(true);
+        }
         // MultiPlayerGameMode.useItemOn: blocks react first.
         if !(sneaking && hands_full)
             && let Some(hit) = block_hit
@@ -5861,6 +5899,7 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
+        self.native_level_tick(false, running);
         self.share_spawn_conditions();
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects(running));
@@ -5963,6 +6002,7 @@ impl Game<'_> {
             self.use_with_hand()?;
             self.use_delay = 4;
         }
+        self.native_level_tick(true, running);
         Ok(())
     }
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
@@ -10323,6 +10363,29 @@ impl Game<'_> {
             registry,
             pos,
         };
+        // A native mod's strippable or tillable block first (Fabric's
+        // StrippableBlockRegistry, TillableBlockRegistry).
+        let here = around.state([0, 0, 0]);
+        let modded = match id.as_str() {
+            "minecraft:axe" => horizon_client::items::mod_strippable(&here.name)
+                .map(|to| (to, "minecraft:item.axe.strip")),
+            "minecraft:hoe"
+                if face_name != "down" && around.state([0, 1, 0]).name == "minecraft:air" =>
+            {
+                horizon_client::items::mod_tillable(&here.name)
+                    .map(|to| (to, "minecraft:item.hoe.till"))
+            }
+            _ => None,
+        };
+        if let Some((to, sound)) = modded {
+            let to = horizon_world::chunk::BlockState {
+                name: to,
+                properties: Default::default(),
+            };
+            let to = horizon_client::block_transform::with_properties_of(registry, to, &here)?;
+            let new = registry.resolve(&to).ok()?;
+            return Some((new, sound.into(), None, 1, "none".into()));
+        }
         let (_, t, state) =
             self.res
                 .transformers()
@@ -11599,6 +11662,12 @@ impl Game<'_> {
                 true,
             );
         }
+        // EntitySleepEvents.ALLOW_SLEEPING: vanilla's checks passed.
+        let mut allow = true;
+        self.native_sleep(head, &mut allow);
+        if !allow {
+            return;
+        }
         self.stop_mining();
         self.left = false;
         self.right = false;
@@ -12132,6 +12201,8 @@ impl Game<'_> {
         self.save_bossbars();
         self.save_schedule();
         self.save_warden_tracker();
+        self.native_save();
+        self.save_native_data()?;
         self.sync_level();
         self.store_owner();
         self.level.write(&self.world_root)?;
@@ -12892,6 +12963,7 @@ impl Game<'_> {
                         }
                         if self.creative {
                             self.screen = Screen::Creative;
+                            self.native_fill_creative();
                             self.creative_screen.reopen();
                             self.refresh_saved_hotbars();
                         } else {
@@ -14766,6 +14838,9 @@ impl<'a> Game<'a> {
             panel: Default::default(),
             native_shaders: Default::default(),
             native_lifecycle: Default::default(),
+            native_watched: Vec::new(),
+            native_data: Default::default(),
+            native_events: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

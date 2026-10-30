@@ -282,7 +282,8 @@ impl Containers<'_> {
                 let fuel = self
                     .items
                     .get(&stack.item)
-                    .is_some_and(|i| i.fuel.is_some());
+                    .is_some_and(|i| i.fuel.is_some())
+                    || horizon_client::items::mod_fuel(&stack.item).is_some();
                 let current_bucket = self
                     .get(view, 1)
                     .is_some_and(|s| &*s.item == "minecraft:bucket");
@@ -770,6 +771,71 @@ impl Game<'_> {
         Some(self.suck_from_slots(source_hopper, &source, hopper))
     }
     /// `HopperBlockEntity.tryTakeInItemFromSlot` over the `DOWN` face of `source`.
+    /// The container at `pos` (a double chest's both halves) as a native mod
+    /// reads it: every slot in order. None where no container is.
+    pub(super) fn container_slots_at(&self, pos: Pos) -> Option<Vec<Option<ItemStack>>> {
+        let c = self.containers();
+        let view = c.view(pos, false)?;
+        if matches!(view.kind, Kind::Composter(_)) || view.len() == 0 {
+            return None;
+        }
+        Some(
+            (0..view.len())
+                .map(|slot| c.get(&view, slot).cloned())
+                .collect(),
+        )
+    }
+    /// Put `stack` into the container at `pos` through its side `face`, as a
+    /// hopper or dropper does (`HopperBlockEntity.addItem`); the remainder.
+    pub(super) fn container_insert_at(
+        &mut self,
+        pos: Pos,
+        face: Direction,
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        let Some(view) = self.containers().view(pos, false) else {
+            return Some(stack);
+        };
+        self.add_item(None, &view, stack, Some(face))
+    }
+    /// Take up to `max` of the first stack a hopper could take out of the
+    /// container at `pos` through its side `face` (`suckInItems`'s slots and
+    /// `canTakeItemThroughFace`).
+    pub(super) fn container_extract_at(
+        &mut self,
+        pos: Pos,
+        face: Direction,
+        max: u32,
+    ) -> Option<ItemStack> {
+        let view = self.containers().view(pos, false)?;
+        if matches!(view.kind, Kind::Composter(_)) || max == 0 {
+            return None;
+        }
+        for slot in view.slots_for_face(Some(face)) {
+            let c = self.containers();
+            let Some(stack) = c.get(&view, slot) else {
+                continue;
+            };
+            if !c.can_take(&view, slot, stack, face) {
+                continue;
+            }
+            let Some(held) = self.slot_mut_at(&view, slot) else {
+                continue;
+            };
+            let Some(stack) = held.as_mut() else {
+                continue;
+            };
+            let mut taken = stack.clone();
+            taken.count = max.min(stack.count);
+            stack.count -= taken.count;
+            if stack.count == 0 {
+                *held = None;
+            }
+            self.view_changed(&view);
+            return Some(taken);
+        }
+        None
+    }
     fn suck_from_slots(
         &mut self,
         source_hopper: Option<Pos>,

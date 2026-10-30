@@ -22,6 +22,14 @@ impl Game<'_> {
     }
     /// The item's `compostable` layers provider.
     fn compostable(&self, stack: &ItemStack) -> Option<serde_json::Value> {
+        // A native mod's chance (CompostingChanceRegistry) first.
+        if let Some(chance) = horizon_client::items::mod_compostable(&stack.item) {
+            let mut layers = serde_json::Map::new();
+            layers.insert("type".into(), "minecraft:binomial".into());
+            layers.insert("n".into(), 1.into());
+            layers.insert("p".into(), f64::from(chance).into());
+            return Some(serde_json::Value::Object(layers));
+        }
         self.items().get(&stack.item)?.compostable.clone()
     }
     /// `ComposterBlock.addLayer` and level event 1500: the provider is
@@ -75,6 +83,7 @@ impl Game<'_> {
                     .items()
                     .get(&stack.item)
                     .is_some_and(|i| i.compostable.is_some())
+                    || horizon_client::items::mod_compostable(&stack.item).is_some()
             })
     }
     /// `HopperBlockEntity.addItem` into the composter's `InputContainer`

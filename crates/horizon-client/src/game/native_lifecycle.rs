@@ -158,6 +158,9 @@ impl Game<'_> {
 
     pub(super) fn native_lifecycle_world_ready(&mut self) {
         if let Some(context) = self.native_lifecycle.world_open_ready() {
+            // ServerWorldEvents.LOAD for the first level, before the
+            // server is ready (SERVER_STARTED).
+            self.native_level_loaded(self.dim.id(), true);
             self.native_world_lifecycle(&context, WorldPhase::WorldOpenReady, "");
         }
     }

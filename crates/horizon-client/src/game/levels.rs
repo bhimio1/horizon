@@ -280,6 +280,7 @@ impl Game<'_> {
             if opened {
                 // The new streaming's radius and meshing options.
                 self.apply_settings();
+                self.native_level_loaded(target.id(), true);
             }
         }
         let host = match host {
@@ -494,6 +495,7 @@ impl Game<'_> {
         for dim in closing {
             self.enter_level(None, dim)?;
             self.save_level(true)?;
+            self.native_level_loaded(dim.id(), false);
             self.enter_level(None, back)?;
             self.levels.parked.remove(&dim);
         }

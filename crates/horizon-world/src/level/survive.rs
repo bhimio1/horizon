@@ -482,6 +482,9 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn ignite_odds(&self, state: BlockStateId) -> i32 {
         if self.b.is_waterlogged(state) {
             0
+        } else if let Some((_, ignite)) = super::flammable::mod_flammable(self.b.table.name(state))
+        {
+            ignite
         } else {
             self.b.data(state).ignite_odds
         }
@@ -489,6 +492,8 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
     pub(crate) fn burn_odds(&self, state: BlockStateId) -> i32 {
         if self.b.is_waterlogged(state) {
             0
+        } else if let Some((burn, _)) = super::flammable::mod_flammable(self.b.table.name(state)) {
+            burn
         } else {
             self.b.data(state).burn_odds
         }

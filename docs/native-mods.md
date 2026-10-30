@@ -42,6 +42,75 @@ mod shows one.
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
+API 4 adds what Fabric API gives a Fabric mod: server events, interaction events, networking, command trees, data
+kept with the world, and the content registries a mod adds to. Bundles that use any of it need `"hooks": 4`. Server
+hooks fire in the `Game`s that simulate the world (single player's server, a LAN host, a dedicated server), never in a
+client of a server; client hooks (`native_tooltip`, `native_creative_items`, `native_payload` from the server) fire in
+the window. How each part of Fabric maps to these: [fabric-parity.md](fabric-parity.md).
+
+| Hook | When | Fabric API |
+|---|---|---|
+| `native_level_tick(end, running)` | before and after each level's tick; `running` is false under `/tick freeze` | `ServerTickEvents.START/END_WORLD_TICK` |
+| `native_level_loaded(level, loaded)` | a level opens or closes | `ServerWorldEvents.LOAD/UNLOAD` |
+| `native_chunk(chunk, loaded)` | a chunk becomes resident or leaves, within half a second | `ServerChunkEvents.CHUNK_LOAD/UNLOAD` |
+| `native_block_changed(pos, old, new)` | a write to or from a state of a block a mod watches (`native_watch_block`) | none (Fabric mods mixin into `setBlock`) |
+| `native_save()` | each save, the autosave included | none (`PersistentState`) |
+| `native_use_block(pos, face, main_hand, result)` | a player uses a block, before it or the item reacts | `UseBlockCallback` |
+| `native_use_item(main_hand, result)` | a player uses the held item on no block | `UseItemCallback` |
+| `native_use_entity(entity, main_hand, result)` | a player uses an entity | `UseEntityCallback` |
+| `native_attack_block(pos, face, result)` | a player starts hitting a block | `AttackBlockCallback` |
+| `native_attack_entity(entity, cancel)` | a player attacks an entity | `AttackEntityCallback` |
+| `native_before_break(pos, state, cancel)`, `native_after_break(pos, state)` | a player breaks a block | `PlayerBlockBreakEvents.BEFORE/AFTER` |
+| `native_block_drops(pos, state, drops)` | a block broken by a player or an explosion drops | `LootTableEvents.MODIFY` (block drops) |
+| `native_player_join`, `native_player_leave` | a player joins, leaves, or the server stops | `ServerPlayConnectionEvents.JOIN/DISCONNECT` |
+| `native_player_hurt(damage_type, amount)` | the player acting is about to take damage; 0 cancels | `ServerLivingEntityEvents.ALLOW_DAMAGE` |
+| `native_mob_hurt(entity, kind, damage_type, amount)` | a mob is about to take damage from an attack, a projectile or `/damage`; 0 cancels | `ServerLivingEntityEvents.ALLOW_DAMAGE` |
+| `native_sleep(head, allow)` | a player is about to lie down, vanilla's checks passed | `EntitySleepEvents.ALLOW_SLEEPING` |
+| `native_player_changed_level(conn, from, to)` | a player went to another level | `ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD` |
+| `native_pick_block(pos, stack)` | what a player picks from a block | pick-block events |
+| `native_player_death`, `native_mob_death` | a player or a mob died | `ServerLivingEntityEvents.AFTER_DEATH` |
+| `native_allow_chat(conn, message, allow)` | a player's chat, before anyone gets it (after `native_filter_chat(true)`) | `ServerMessageEvents.ALLOW_CHAT_MESSAGE` |
+| `native_chat_message(conn, message)` | a player's chat went out | `ServerMessageEvents.CHAT_MESSAGE` |
+| `native_commands(commands)` | each server tick: the mod's command names, for every player's command tree (they run through `native_command`) | `CommandRegistrationCallback` |
+| `native_command_syntax(syntax)` | each server tick: a command's full Brigadier node (the commands report's format), so clients suggest and check its arguments | `CommandRegistrationCallback` (arguments) |
+| `native_payload(from, channel, data)` | a custom payload arrived, on the server or the client | networking API receivers |
+| `native_tooltip(stack, lines)` | an item's tooltip, after its own lines | `ItemTooltipCallback` |
+| `native_creative_items(tab, items)` | a creative tab opens the first time | `ItemGroupEvents.modifyEntriesEvent` |
+
+`NativeUse` answers the use and attack hooks as `InteractionResult` does: `Pass`, `Success` (the arm swings), `Consume`,
+`Fail`; any but `Pass` ends the click.
+
+The helpers (`crates/horizon-client/src/game/native_server.rs`):
+- **The level:** `native_level`, `native_world_dir`, `native_loaded`, `native_block`, `native_set_block`,
+  `native_break_block`, `native_powered`, `native_watch_block`, and the watched blocks of a chunk that came
+  (`native_watched_blocks`, which skips sections whose palette holds none).
+- **Block states:** by name and property (`native_state_name`, `native_state_property`, `native_default_state`,
+  `native_state_with`), all of them (`native_state_count`), their facts (`native_state_facts`: air, hardness,
+  collision, light, fluid) and tags (`native_block_tagged`).
+- **Entities and items:** `native_entity_type`, `native_entity_position`, dropped items (`native_items_in`,
+  `native_update_item`, `native_spawn_item`), `native_max_stack`, cooking recipes (`native_cook`).
+- **Containers** (Fabric's transfer API, item storage): `native_container_items`, `native_insert_item` and
+  `native_extract_item` through a side, with the hopper's rules (double chests, a furnace's faces); a chunk's block
+  entities (`native_block_entities`).
+- **Effects:** `native_play_sound`, `native_particles`, for the players near a position.
+- **Players:** `native_players`, `native_acting_player`, `native_held`, `native_sneaking`, `native_look`, `native_permission`,
+  `native_teleport`, and a command's reply (`native_reply`).
+- **Data kept with the world** (Fabric's data attachments, in the world folder's `horizon-native-data.json`):
+  `native_world_data`, `native_set_world_data`, and per block `native_block_data`, `native_set_block_data`, which
+  last while that block stays.
+- **Networking:** `native_send_payload(to, channel, data)`, to a player from the server or to the server from a
+  client. A Horizon server and client drop payloads on channels no mod reads.
+- **Chat:** `native_filter_chat` holds players' chat for `native_allow_chat`.
+- **Content registries**, for every game of the process: `native_set_fuel` (`FuelRegistry`), `native_set_compostable`
+  (`CompostingChanceRegistry`), `native_set_strippable`, `native_set_tillable`, `native_set_flammable`.
+- **Game rules:** `native_register_game_rule` (`mymod:rule`, a bool or an int), which `/gamerule` reads and sets
+  for game masters and every player's command tree suggests, and `native_game_rule`.
+
+A native mod can name the other native mods it needs in its `horizon-native.json`: `"depends": {"other_mod": ">=1.2.0"}`
+(`*` for any version, an exact version, or `>=` one), and the ones it can't be built with: `"breaks": {"old_mod":
+"*"}`. The launcher refuses to build a set of mods with a need missing, a version it doesn't take, or a pair that
+breaks.
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads

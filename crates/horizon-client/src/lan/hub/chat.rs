@@ -34,6 +34,14 @@ fn red(key: &str) -> Tag {
     t
 }
 
+/// A player's chat message, ready to send to everyone.
+pub struct HeldChat {
+    pub sender: u128,
+    pub message: ChatMessage,
+    bound: play::ChatTypeBound,
+    line: String,
+}
+
 /// PlayerChatMessage as the server relays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
@@ -218,10 +226,25 @@ impl Hub {
             target: None,
         };
         let line = format!("<{name}> {}", message.content);
-        self.broadcast_chat(&message, &bound, line, events);
-        events.push(HostEvent::PlayerChat {
+        let held = HeldChat {
             sender: uuid,
-            text: message.content,
+            message,
+            bound,
+            line,
+        };
+        if self.hold_chat {
+            events.push(HostEvent::HeldChat(Box::new(held)));
+        } else {
+            self.send_held_chat(held, events);
+        }
+    }
+
+    /// Send a player's chat message to everyone, then tell server mods.
+    pub fn send_held_chat(&mut self, held: HeldChat, events: &mut Vec<HostEvent>) {
+        self.broadcast_chat(&held.message, &held.bound, held.line, events);
+        events.push(HostEvent::PlayerChat {
+            sender: held.sender,
+            text: held.message.content,
         });
     }
 

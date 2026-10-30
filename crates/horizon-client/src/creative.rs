@@ -487,6 +487,28 @@ impl Creative {
         }
         self.forget_items();
     }
+    /// Items a mod adds to tab `id` (Fabric's `ItemGroupEvents`), after the
+    /// tab's own and, for items it has not listed yet, at the end of the
+    /// Search tab. False for an unknown tab.
+    pub fn add_items(&mut self, id: &str, items: Vec<ItemStack>) -> bool {
+        let Some(tab) = self.tabs.iter_mut().find(|t| t.id == id) else {
+            return false;
+        };
+        for item in items {
+            if !self.search_items.iter().any(|s| s.item == item.item) {
+                let (namespace, path) = split_id(&java_lower(&item.item));
+                self.search_index.push(SearchEntry {
+                    namespace,
+                    path,
+                    ..Default::default()
+                });
+                self.search_items.push(item.clone());
+            }
+            tab.items.push(item);
+        }
+        self.forget_items();
+        true
+    }
     /// Drop the shown items, so the next `items` works them out again: a
     /// reload can rename items without changing the Search label.
     pub fn forget_items(&self) {

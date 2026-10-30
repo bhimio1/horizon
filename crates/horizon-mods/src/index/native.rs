@@ -21,6 +21,96 @@ pub struct Manifest {
     /// `horizon` is only the revision it was tested on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<u32>,
+    /// Other native mods this one needs, by id, with the versions it takes
+    /// ([`version_matches`]): the launcher builds it only with them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub depends: BTreeMap<String, String>,
+    /// Native mods this one can't be built with, by id, with the versions
+    /// that break it (`*` for all): the launcher refuses the pair.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub breaks: BTreeMap<String, String>,
+}
+
+/// Whether `version` is one `requirement` takes: `*` any, `>=1.2.0` that
+/// one or a later one, else exactly it. Versions compare by their dotted
+/// numbers (`1.10` after `1.9`); a `-` or `+` suffix is left out.
+pub fn version_matches(requirement: &str, version: &str) -> bool {
+    fn numbers(v: &str) -> Option<Vec<u64>> {
+        let core = v.trim().split(['-', '+']).next()?;
+        core.split('.').map(|n| n.parse().ok()).collect()
+    }
+    let requirement = requirement.trim();
+    if requirement == "*" {
+        return true;
+    }
+    if let Some(min) = requirement.strip_prefix(">=") {
+        return match (numbers(version), numbers(min)) {
+            (Some(mut v), Some(mut m)) => {
+                let len = v.len().max(m.len());
+                v.resize(len, 0);
+                m.resize(len, 0);
+                v >= m
+            }
+            _ => false,
+        };
+    }
+    requirement == version.trim()
+}
+
+/// Whether a requirement is one [`version_matches`] reads.
+fn valid_requirement(requirement: &str) -> bool {
+    let r = requirement.trim();
+    match r.strip_prefix(">=") {
+        Some(min) => min.split(['-', '+']).next().is_some_and(|core| {
+            core.split('.')
+                .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        }),
+        None => !r.is_empty(),
+    }
+}
+
+/// What the mods (id, version, needs) are missing from one another, one line
+/// each; empty when every need is met.
+pub fn unmet_dependencies<'a>(
+    mods: impl IntoIterator<Item = (&'a str, &'a str, &'a BTreeMap<String, String>)>,
+) -> Vec<String> {
+    let mods: Vec<_> = mods.into_iter().collect();
+    let mut unmet = Vec::new();
+    for (id, _, depends) in &mods {
+        for (need, requirement) in *depends {
+            match mods.iter().find(|(other, _, _)| other == need) {
+                None => unmet.push(format!(
+                    "{id} needs {need} {requirement}, which isn't turned on."
+                )),
+                Some((_, version, _)) if !version_matches(requirement, version) => unmet.push(
+                    format!("{id} needs {need} {requirement}, and {version} is installed."),
+                ),
+                Some(_) => {}
+            }
+        }
+    }
+    unmet
+}
+
+/// The mods (id, version, breaks) that one of them can't be built with, one
+/// line each; empty when none is.
+pub fn broken_pairs<'a>(
+    mods: impl IntoIterator<Item = (&'a str, &'a str, &'a BTreeMap<String, String>)>,
+) -> Vec<String> {
+    let mods: Vec<_> = mods.into_iter().collect();
+    let mut broken = Vec::new();
+    for (id, _, breaks) in &mods {
+        for (other, requirement) in *breaks {
+            if let Some((_, version, _)) = mods.iter().find(|(o, _, _)| o == other)
+                && version_matches(requirement, version)
+            {
+                broken.push(format!(
+                    "{id} doesn't work with {other} {version} ({requirement})."
+                ));
+            }
+        }
+    }
+    broken
 }
 
 pub fn revision(value: &str) -> bool {
@@ -39,6 +129,11 @@ impl Manifest {
             || !revision(&self.horizon)
             || !revision(&self.mixins)
             || self.hooks == Some(0)
+            || self
+                .depends
+                .iter()
+                .chain(&self.breaks)
+                .any(|(id, r)| !valid_id(id) || *id == self.id || !valid_requirement(r))
         {
             return Err(
                 "invalid native manifest: schema 1, id, version, game and exact revisions required"
@@ -167,6 +262,8 @@ mod tests {
             horizon: "a".repeat(40),
             mixins: "b".repeat(40),
             hooks: None,
+            depends: BTreeMap::new(),
+            breaks: BTreeMap::new(),
         }
     }
     fn read(name: &str, extras: &[(&str, &[u8])], mixin: &str) -> Result<Bundle, String> {
@@ -282,5 +379,40 @@ mod tests {
             ..manifest()
         };
         assert!(zero.check().is_err());
+    }
+
+    #[test]
+    fn dependencies_name_versions_and_must_be_there() {
+        assert!(version_matches("*", "0.1.0"));
+        assert!(version_matches(">=1.2", "1.10.0"));
+        assert!(!version_matches(">=1.10", "1.9.9"));
+        assert!(version_matches(">=1.2.0", "1.2.0-beta"));
+        assert!(version_matches("0.3.0", "0.3.0") && !version_matches("0.3.0", "0.3.1"));
+        let needs = BTreeMap::from([("lib".to_owned(), ">=2.0".to_owned())]);
+        let none = BTreeMap::new();
+        assert_eq!(unmet_dependencies([("a", "1.0", &needs)]).len(), 1);
+        assert_eq!(
+            unmet_dependencies([("a", "1.0", &needs), ("lib", "1.5", &none)]).len(),
+            1
+        );
+        assert!(unmet_dependencies([("a", "1.0", &needs), ("lib", "2.1", &none)]).is_empty());
+        let mut m = manifest();
+        m.depends = BTreeMap::from([("lib".to_owned(), ">=x".to_owned())]);
+        assert!(m.check().is_err());
+        m.depends = BTreeMap::from([("lib".to_owned(), ">=1.0".to_owned())]);
+        assert!(m.check().is_ok());
+    }
+
+    #[test]
+    fn breaks_names_the_versions_a_mod_cant_be_built_with() {
+        let breaks = BTreeMap::from([("old_lib".to_owned(), "*".to_owned())]);
+        let none = BTreeMap::new();
+        assert!(broken_pairs([("a", "1.0", &breaks)]).is_empty());
+        assert_eq!(
+            broken_pairs([("a", "1.0", &breaks), ("old_lib", "0.1", &none)]).len(),
+            1
+        );
+        let newer = BTreeMap::from([("lib".to_owned(), ">=2.0".to_owned())]);
+        assert!(broken_pairs([("a", "1.0", &newer), ("lib", "1.9", &none)]).is_empty());
     }
 }

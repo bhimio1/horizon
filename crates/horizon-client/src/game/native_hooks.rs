@@ -6,6 +6,13 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 4 adds what Fabric API gives a mod (docs/fabric-parity.md): server
+//! events (level ticks, levels and chunks, saves, players joining, leaving,
+//! hurt and dying, mobs dying, chat), interaction events (using and
+//! attacking blocks, items and entities, breaking blocks and their drops),
+//! command trees, custom payloads, tooltips and creative tabs; and the
+//! helpers of `native_server.rs`, data kept with the world included.
+//!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
@@ -22,7 +29,9 @@
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
 use super::native_lifecycle::{NativeLifecycleContext, WorldPhase};
+use super::native_server::NativeUse;
 use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use horizon_client::items::ItemStack;
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -32,13 +41,14 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_world::registry::BlockStateId;
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 4;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -334,6 +344,220 @@ impl Game<'_> {
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
     }
+    /// Before (`end` false) and after each level's tick, in the `Game`s
+    /// that simulate the world (single player's server, a LAN host, a
+    /// dedicated server; never a client of a server), each level in turn
+    /// (`native_level`). `running` is false while the world is frozen
+    /// (`/tick freeze`): blocks and entities stand still. API 4.
+    pub(super) fn native_level_tick(&mut self, end: bool, running: bool) {
+        let _ = (end, running);
+    }
+    /// A player uses block `pos` on its face `face` (a unit vector) with the
+    /// main hand or the off hand (`native_held`), sneaking or not
+    /// (`native_sneaking`), before the block or the item reacts. Set
+    /// `result` while it is `Pass`: any other value ends the click.
+    /// Where `native_level_tick` fires; spectators never get here. API 4.
+    pub(super) fn native_use_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        main_hand: bool,
+        result: &mut NativeUse,
+    ) {
+        let _ = (pos, face, main_hand, result);
+    }
+    /// A block at `pos` changed from `old` to `new`, one of them a state of
+    /// a block some mod watches (`native_watch_block`): each write, in
+    /// order, during the next tick of its level while the world runs. API 4.
+    pub(super) fn native_block_changed(
+        &mut self,
+        pos: [i32; 3],
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (pos, old, new);
+    }
+    /// Chunk `chunk` (its x and z) of the level in place became resident
+    /// (`loaded`) or left; noticed within half a second while the world
+    /// runs. A chunk that left can no longer be read. API 4.
+    pub(super) fn native_chunk(&mut self, chunk: [i32; 2], loaded: bool) {
+        let _ = (chunk, loaded);
+    }
+    /// The world is being saved (each autosave, `/save-all`, the save on
+    /// close): write what the mod keeps, with `native_set_world_data` or
+    /// in `native_world_dir`. Where `native_level_tick` fires. API 4.
+    pub(super) fn native_save(&mut self) {}
+    /// A player starts hitting block `pos` on its face `face`, before it
+    /// is dug (AttackBlockCallback): set `result` to anything but `Pass`
+    /// and the dig doesn't start (the player's block comes back). On the
+    /// server; the player acting is `native_acting_player`. API 4.
+    pub(super) fn native_attack_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        result: &mut NativeUse,
+    ) {
+        let _ = (pos, face, result);
+    }
+    /// A player is about to break block `pos`, which is `state`, mined or
+    /// in creative (PlayerBlockBreakEvents.BEFORE): set `cancel` to keep
+    /// it. API 4.
+    pub(super) fn native_before_break(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        cancel: &mut bool,
+    ) {
+        let _ = (pos, state, cancel);
+    }
+    /// A player broke block `pos`, which was `state`
+    /// (PlayerBlockBreakEvents.AFTER). API 4.
+    pub(super) fn native_after_break(&mut self, pos: [i32; 3], state: BlockStateId) {
+        let _ = (pos, state);
+    }
+    /// What block `pos` (`state`) drops, broken by a player or an
+    /// explosion, before it spawns: add, change or remove stacks (the
+    /// block loot tables' modify event). API 4.
+    pub(super) fn native_block_drops(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        drops: &mut Vec<ItemStack>,
+    ) {
+        let _ = (pos, state, drops);
+    }
+    /// A player uses the item in a hand (`native_held`) on no block
+    /// (UseItemCallback), before the item reacts; set `result` while it
+    /// is `Pass`. API 4.
+    pub(super) fn native_use_item(&mut self, main_hand: bool, result: &mut NativeUse) {
+        let _ = (main_hand, result);
+    }
+    /// A player uses entity `entity` (its network id: `native_entity_type`)
+    /// with a hand (UseEntityCallback), before it reacts; set `result`
+    /// while it is `Pass`. API 4.
+    pub(super) fn native_use_entity(
+        &mut self,
+        entity: i32,
+        main_hand: bool,
+        result: &mut NativeUse,
+    ) {
+        let _ = (entity, main_hand, result);
+    }
+    /// A player attacks entity `entity` (AttackEntityCallback): set
+    /// `cancel` and the attack does nothing. On the server. API 4.
+    pub(super) fn native_attack_entity(&mut self, entity: i32, cancel: &mut bool) {
+        let _ = (entity, cancel);
+    }
+    /// Player `name` (`uuid`, connection `conn`) joined the server and
+    /// stands in the world (ServerPlayConnectionEvents.JOIN). API 4.
+    pub(super) fn native_player_join(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// Player `name` left the server, the server's stop included
+    /// (ServerPlayConnectionEvents.DISCONNECT). API 4.
+    pub(super) fn native_player_leave(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// The player acting is about to lie down in the bed whose head is at
+    /// `head`, vanilla's checks passed (EntitySleepEvents.ALLOW_SLEEPING):
+    /// clear `allow` to keep them up (say why with `native_reply`). API 4.
+    pub(super) fn native_sleep(&mut self, head: [i32; 3], allow: &mut bool) {
+        let _ = (head, allow);
+    }
+    /// Player `conn` went from level `from` to level `to`
+    /// (`minecraft:the_nether`), through a portal or a teleport
+    /// (ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD). API 4.
+    pub(super) fn native_player_changed_level(&mut self, conn: u32, from: &str, to: &str) {
+        let _ = (conn, from, to);
+    }
+    /// What a player picks from block `pos` (the pick-block key): change
+    /// `stack`, or set it to None to pick nothing. API 4.
+    pub(super) fn native_pick_block(&mut self, pos: [i32; 3], stack: &mut Option<ItemStack>) {
+        let _ = (pos, stack);
+    }
+    /// Player `name` died (ServerLivingEntityEvents.AFTER_DEATH), after
+    /// their drops. API 4.
+    pub(super) fn native_player_death(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// The player acting is about to take `amount` of `damage_type`
+    /// (`minecraft:fall`...) (ServerLivingEntityEvents.ALLOW_DAMAGE):
+    /// change `amount`, or set it to 0 to cancel the hurt. API 4.
+    pub(super) fn native_player_hurt(&mut self, damage_type: &str, amount: &mut f32) {
+        let _ = (damage_type, amount);
+    }
+    /// Mob `entity` of type `kind` (`minecraft:zombie`) is about to take
+    /// `amount` of `damage_type` from a player's or a mob's attack, a
+    /// projectile or `/damage` (ServerLivingEntityEvents.ALLOW_DAMAGE): change
+    /// `amount`, or set it to 0 to cancel the hurt. Fire, drowning, falls and
+    /// other harm the mob takes on its own tick don't come here. API 4.
+    pub(super) fn native_mob_hurt(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        damage_type: &str,
+        amount: &mut f32,
+    ) {
+        let _ = (entity, kind, damage_type, amount);
+    }
+    /// Mob `entity` of type `kind` (`minecraft:zombie`) died of
+    /// `damage_type` ("" when unknown) (AFTER_DEATH). API 4.
+    pub(super) fn native_mob_death(&mut self, entity: i32, kind: &str, damage_type: &str) {
+        let _ = (entity, kind, damage_type);
+    }
+    /// Level `level` (`minecraft:the_nether`) was opened (`loaded`) or
+    /// closed (ServerWorldEvents.LOAD/UNLOAD): the first level just before
+    /// `WorldOpenReady`, the others when a player first goes there; all of
+    /// them after the final save. API 4.
+    pub(super) fn native_level_loaded(&mut self, level: &str, loaded: bool) {
+        let _ = (level, loaded);
+    }
+    /// Player `conn` is about to say `message` in chat
+    /// (ServerMessageEvents.ALLOW_CHAT_MESSAGE): clear `allow` and nobody
+    /// gets it. Only while a mod asked with `native_filter_chat`. API 4.
+    pub(super) fn native_allow_chat(&mut self, conn: u32, message: &str, allow: &mut bool) {
+        let _ = (conn, message, allow);
+    }
+    /// Player `conn` said `message` in chat, sent to everyone
+    /// (ServerMessageEvents.CHAT_MESSAGE). API 4.
+    pub(super) fn native_chat_message(&mut self, conn: u32, message: &str) {
+        let _ = (conn, message);
+    }
+    /// The mod's commands, for every player's command tree: push each
+    /// command's name (`create`); it takes any text after it. Asked each
+    /// server tick; the commands run through `native_command`
+    /// (CommandRegistrationCallback). API 4.
+    pub(super) fn native_commands(&mut self, commands: &mut Vec<String>) {
+        let _ = commands;
+    }
+    /// The full syntax of the mod's commands, for every player's command
+    /// tree and its suggestions: push (name, the command's node as JSON in
+    /// the commands report's format: a `literal` whose children are
+    /// literals and `argument`s naming their `parser`, such as
+    /// `brigadier:integer` or `minecraft:block_pos`, each maybe
+    /// `executable`). It takes the place of the name's free text from
+    /// `native_commands`; the command still runs through `native_command`.
+    /// Asked each server tick. API 4.
+    pub(super) fn native_command_syntax(&mut self, syntax: &mut Vec<(String, String)>) {
+        let _ = syntax;
+    }
+    /// A payload arrived on `channel` (`mod:name`): from player `from` on a
+    /// server, from the server (None) on a client (the networking API's
+    /// receivers). Answer with `native_send_payload`. API 4.
+    pub(super) fn native_payload(&mut self, from: Option<u32>, channel: &str, data: &[u8]) {
+        let _ = (from, channel, data);
+    }
+    /// The tooltip of `stack`: push lines (text, colour) after the item's
+    /// own (ItemTooltipCallback). In the window. API 4.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
+    }
+    /// The creative tab `tab` (`minecraft:building_blocks`) opens for the
+    /// first time: push the items to add after its own
+    /// (ItemGroupEvents.modifyEntriesEvent). In the window. API 4.
+    pub(super) fn native_creative_items(&mut self, tab: &str, items: &mut Vec<ItemStack>) {
+        let _ = (tab, items);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -591,6 +815,9 @@ impl Game<'_> {
     }
     /// A native mod's command.
     pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
+        if self.native_rule_command(command) {
+            return true;
+        }
         let mut ran = false;
         self.native_command(command, &mut ran);
         ran
@@ -674,6 +901,86 @@ mod tests {
             for mac in ["!(", "![", "! {", "!{"] {
                 assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
             }
+        }
+    }
+
+    #[test]
+    fn server_helpers_stay_hookable() {
+        let source = include_str!("native_server.rs");
+        for line in source.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in server helpers: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in server helpers: {line}");
+            }
+        }
+    }
+
+    /// The API 4 events fire where their contracts say.
+    #[test]
+    fn server_events_fire_at_their_call_sites() {
+        let game = include_str!("../game.rs");
+        let tick = game.split("    fn tick_world(").nth(1).unwrap();
+        let tick = tick.split("\n    fn ").next().unwrap();
+        let start = tick
+            .find("self.native_level_tick(false, running);")
+            .unwrap();
+        let blocks = tick.find("self.tick_blocks()").unwrap();
+        let end = tick
+            .rfind("self.native_level_tick(true, running);")
+            .unwrap();
+        let sculk = tick.find("self.tick_sculk_blocks()").unwrap();
+        assert!(start < blocks && sculk < end);
+
+        let use_hand = game.split("    fn use_hand(").nth(1).unwrap();
+        let hook = use_hand.find("self.native_use_block(").unwrap();
+        let sneak = use_hand.find("if !(sneaking && hands_full)").unwrap();
+        assert!(hook < sneak, "the hook sees sneaking clicks too");
+
+        let sculk = include_str!("sculk.rs");
+        let sync = sculk.split("fn sculk_sync_index(").nth(1).unwrap();
+        let sync = sync.split("\n    fn ").next().unwrap();
+        for call in [
+            "self.native_chunk([key.0, key.1], true);",
+            "self.native_chunk([key.0, key.1], false);",
+            "self.native_block_changed(",
+        ] {
+            assert!(sync.contains(call), "missing: {call}");
+        }
+    }
+
+    /// Every hook point has a call site in the game: a hook that is never
+    /// called is a promise the game doesn't keep.
+    #[test]
+    fn every_hook_point_is_called() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut source = std::fs::read_to_string(dir.join("game.rs")).unwrap();
+        for entry in std::fs::read_dir(dir.join("game")).unwrap() {
+            let path = entry.unwrap().path();
+            let hooks = path.ends_with("native_hooks.rs");
+            if path.extension().is_some_and(|e| e == "rs") && !hooks {
+                source += &std::fs::read_to_string(&path).unwrap();
+            }
+        }
+        let own = include_str!("native_hooks.rs");
+        // native_hooks.rs calls a few itself (`client_mod_command`...).
+        let own_calls = own.split("/// Helpers for native mods").nth(1).unwrap();
+        let section = own
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        for line in section.lines() {
+            let Some(name) = line.trim().strip_prefix("pub(super) fn native_") else {
+                continue;
+            };
+            let name = name.split('(').next().unwrap();
+            let call = format!(".native_{name}(");
+            assert!(
+                source.contains(&call) || own_calls.contains(&call),
+                "native_{name} is never called"
+            );
         }
     }
 

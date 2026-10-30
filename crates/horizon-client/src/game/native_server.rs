@@ -1,0 +1,594 @@
+//! World helpers for native mods (native hook API 4), on the `Game`s that
+//! simulate the world: what a mod adding machines or blocks that react to
+//! the player reads and changes when the server events
+//! (`native_level_tick`, `native_use_block`, `native_block_changed`,
+//! `native_chunk`) reach it. Positions are block positions of the level in
+//! place (`native_level`); states are the block registry's ids, the same
+//! for the whole game. Kept as stable as the hook points, and free of `cfg`
+//! and macros like them (`native_hooks::tests::server_helpers_stay_hookable`).
+use super::{Dim, Game, native_events};
+use horizon_client::items::ItemStack;
+use horizon_core::{
+    geometry::{Direction, Vec3},
+    position::BlockPos,
+};
+use horizon_world::registry::BlockStateId;
+use std::path::PathBuf;
+
+/// What a `native_use_block` hook made of the click (`InteractionResult`).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum NativeUse {
+    /// Not the mod's: the block and the held item react as usual.
+    #[default]
+    Pass,
+    /// Done: the arm swings and the click ends.
+    Success,
+    /// Done without a swing.
+    Consume,
+    /// Refused: the click ends with nothing done.
+    Fail,
+}
+
+/// A block state's facts as a native mod reads them (`native_state_facts`).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeStateFacts {
+    pub(crate) air: bool,
+    /// `destroyTime`: -1 for unbreakable blocks.
+    pub(crate) hardness: f32,
+    pub(crate) explosion_resistance: f32,
+    /// Whether its collision is the full cube.
+    pub(crate) full_collision: bool,
+    /// Whether placing a block may replace it (grass, water...).
+    pub(crate) replaceable: bool,
+    /// The light it gives, 0 to 15.
+    pub(crate) light: u8,
+    pub(crate) fluid: NativeFluid,
+    /// The fluid's amount, 1 to 8 (8 a source or falling), 0 with none.
+    pub(crate) fluid_level: u8,
+    pub(crate) fluid_falling: bool,
+}
+
+/// The fluid in a block state.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeFluid {
+    None,
+    Water,
+    Lava,
+}
+
+/// A game rule's value (`native_register_game_rule`).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeRuleValue {
+    Bool(bool),
+    Int(i32),
+}
+
+/// A dropped item as a native mod reads it (`native_items_in`) and writes
+/// it back (`native_update_item`).
+#[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NativeItemEntity {
+    pub(crate) id: u32,
+    pub(crate) item: String,
+    /// 0 removes the entity when written back.
+    pub(crate) count: u32,
+    pub(crate) position: [f64; 3],
+    pub(crate) velocity: [f64; 3],
+}
+
+/// Server helpers for native mods; nothing in Horizon calls them.
+#[allow(dead_code)]
+impl Game<'_> {
+    /// The level in place: `minecraft:overworld`, `minecraft:the_nether`,
+    /// `minecraft:the_end`. The events of one tick are all of one level.
+    pub(super) fn native_level(&self) -> &'static str {
+        self.dim.id()
+    }
+    /// The world's save folder: a mod keeps its per-world data here.
+    pub(super) fn native_world_dir(&self) -> PathBuf {
+        self.world_root.clone()
+    }
+    /// Whether `pos` is in the level's height and its chunk is resident.
+    pub(super) fn native_loaded(&self, pos: [i32; 3]) -> bool {
+        (self.dim.min_y()..=self.dim.max_y()).contains(&pos[1]) && self.world.loaded(pos[0], pos[2])
+    }
+    /// The block state at `pos`; air where nothing is resident.
+    pub(super) fn native_block(&self, pos: [i32; 3]) -> BlockStateId {
+        self.world.block(pos[0], pos[1], pos[2])
+    }
+    /// The block of a state (`minecraft:oak_log`).
+    pub(super) fn native_state_name(&self, state: BlockStateId) -> Option<&str> {
+        let s = self.pack.assets.registry.state(state)?;
+        Some(s.name.as_str())
+    }
+    /// A property of a state (`axis` gives `y`); None when it has none.
+    pub(super) fn native_state_property(&self, state: BlockStateId, key: &str) -> Option<&str> {
+        let s = self.pack.assets.registry.state(state)?;
+        s.properties.get(key).map(String::as_str)
+    }
+    /// The default state of block `name` (`Block.defaultBlockState`).
+    pub(super) fn native_default_state(&self, name: &str) -> Option<BlockStateId> {
+        self.pack.assets.registry.default_state(name)
+    }
+    /// `state` with property `key` set to `value` (`BlockState.setValue`);
+    /// None when the block has no such property or value.
+    pub(super) fn native_state_with(
+        &self,
+        state: BlockStateId,
+        key: &str,
+        value: &str,
+    ) -> Option<BlockStateId> {
+        let registry = self.pack.assets.registry;
+        let mut s = registry.state(state)?.clone();
+        let slot = s.properties.get_mut(key)?;
+        *slot = value.to_owned();
+        registry.id(&s)
+    }
+    /// The number of block states: ids run from 0 to this one, less one.
+    pub(super) fn native_state_count(&self) -> u32 {
+        self.pack.assets.registry.len() as u32
+    }
+    /// What state `state` is: air, hardness, collision, light and fluid;
+    /// None for an id past `native_state_count`.
+    pub(super) fn native_state_facts(&self, state: BlockStateId) -> Option<NativeStateFacts> {
+        if state.0 >= self.native_state_count() {
+            return None;
+        }
+        let facts = self.res.facts();
+        let f = facts.get(state);
+        let fluid = match f.fluid {
+            horizon_client::blocks::Fluid::None => NativeFluid::None,
+            horizon_client::blocks::Fluid::Water => NativeFluid::Water,
+            horizon_client::blocks::Fluid::Lava => NativeFluid::Lava,
+        };
+        Some(NativeStateFacts {
+            air: facts.is_air(state),
+            hardness: f.hardness,
+            explosion_resistance: f.explosion_resistance,
+            full_collision: f.full_collision,
+            replaceable: f.replaceable,
+            light: f.emission,
+            fluid,
+            fluid_level: f.fluid_level,
+            fluid_falling: f.fluid_falling,
+        })
+    }
+    /// Whether the block of `state` is in block tag `tag` (`minecraft:logs`;
+    /// `logs` means the same), the world's data packs included.
+    pub(super) fn native_block_tagged(&self, state: BlockStateId, tag: &str) -> bool {
+        let Some(name) = self.native_state_name(state) else {
+            return false;
+        };
+        let items = self.items();
+        if tag.contains(':') {
+            return items.block_in_tag(tag, name);
+        }
+        let mut full = String::from("minecraft:");
+        full.push_str(tag);
+        items.block_in_tag(&full, name)
+    }
+    /// The eyes and the unit look direction of the player acting now (the
+    /// one `native_use_block` or `native_command` is about), as vanilla
+    /// picks blocks from.
+    pub(super) fn native_look(&self) -> Option<([f64; 3], [f64; 3])> {
+        self.aim()
+    }
+    /// The blocks of resident chunk `chunk` (its x and z) in the states mods
+    /// watch (`native_watch_block`), with their states: what a mod looks for
+    /// when `native_chunk` says a chunk came. Sections with no watched state
+    /// in their palette are passed over unread.
+    pub(super) fn native_watched_blocks(&self, chunk: [i32; 2]) -> Vec<([i32; 3], BlockStateId)> {
+        let mut found = Vec::new();
+        let Some(column) = self.world.chunks.get(&(chunk[0], chunk[1])) else {
+            return found;
+        };
+        let watched = |v: u32| self.native_watched.get(v as usize) == Some(&true);
+        let mut cells = [0u32; 4096];
+        for (s, section) in column.sections.iter().enumerate() {
+            if !section.blocks.maybe_has(watched) {
+                continue;
+            }
+            let y0 = column.min_y() + s as i32 * 16;
+            section.unpack(&mut cells);
+            for (i, v) in cells.iter().enumerate() {
+                if watched(*v) {
+                    let x = chunk[0] * 16 + (i & 15) as i32;
+                    let z = chunk[1] * 16 + ((i >> 4) & 15) as i32;
+                    found.push(([x, y0 + (i >> 8) as i32, z], BlockStateId(*v)));
+                }
+            }
+        }
+        found
+    }
+    /// Have `native_block_changed` report each write of block `name`'s
+    /// states (to them or from them). The number of states, 0 for an
+    /// unknown block. Call it when the world opens (`WorldOpenReady`): a
+    /// watch lasts as long as the `Game`.
+    pub(super) fn native_watch_block(&mut self, name: &str) -> usize {
+        // The world records the writes of `world.watched`, which sculk's
+        // tables also fill when they are built (`sculk_prepare` keeps these).
+        let registry = self.pack.assets.registry;
+        let n = registry.len();
+        self.native_watched.resize(n, false);
+        if self.world.watched.len() < n {
+            self.world.watched.resize(n, false);
+        }
+        let mut count = 0;
+        for i in 0..n {
+            let state = registry.state(BlockStateId(i as u32));
+            if state.is_some_and(|s| s.name == name) {
+                self.native_watched[i] = true;
+                self.world.watched[i] = true;
+                count += 1;
+            }
+        }
+        count
+    }
+    /// Set `pos` to `state` as `Level.setBlock` with `UPDATE_ALL` does:
+    /// neighbours update and react. Drops nothing.
+    pub(super) fn native_set_block(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+    ) -> Result<(), String> {
+        self.level_set(pos, state).map_err(|e| e.to_string())
+    }
+    /// Break the block at `pos` as `Level.destroyBlock` with drops does.
+    pub(super) fn native_break_block(&mut self, pos: [i32; 3]) -> bool {
+        self.destroy_block_dropping(pos).is_ok()
+    }
+    /// Whether redstone powers the block at `pos` (`hasNeighborSignal`).
+    pub(super) fn native_powered(&mut self, pos: [i32; 3]) -> bool {
+        let at = BlockPos::new(pos[0], pos[1], pos[2]);
+        self.with_level(|b, level, ticks| b.has_neighbor_signal(level, ticks, at))
+    }
+    /// The dropped items whose position is in the box `lo..hi`.
+    pub(super) fn native_items_in(&self, lo: [f64; 3], hi: [f64; 3]) -> Vec<NativeItemEntity> {
+        let inside = |p: &Vec3| {
+            p.x >= lo[0]
+                && p.x < hi[0]
+                && p.y >= lo[1]
+                && p.y < hi[1]
+                && p.z >= lo[2]
+                && p.z < hi[2]
+        };
+        self.dropped
+            .iter()
+            .filter(|e| inside(&e.position))
+            .map(|e| NativeItemEntity {
+                id: e.id,
+                item: e.stack.item.to_string(),
+                count: e.stack.count,
+                position: [e.position.x, e.position.y, e.position.z],
+                velocity: [e.velocity.x, e.velocity.y, e.velocity.z],
+            })
+            .collect()
+    }
+    /// Write back a dropped item's count, position and velocity (not its
+    /// item); a count of 0 removes it. False when it is gone.
+    pub(super) fn native_update_item(&mut self, item: &NativeItemEntity) -> bool {
+        if item.count == 0 {
+            let before = self.dropped.len();
+            self.dropped.retain(|e| e.id != item.id);
+            return self.dropped.len() < before;
+        }
+        let Some(e) = self.dropped.iter_mut().find(|e| e.id == item.id) else {
+            return false;
+        };
+        e.stack.count = item.count;
+        e.position = Vec3::new(item.position[0], item.position[1], item.position[2]);
+        e.velocity = Vec3::new(item.velocity[0], item.velocity[1], item.velocity[2]);
+        true
+    }
+    /// Drop `count` of `item` at `position`, moving at `velocity`, with
+    /// the usual pickup delay of a block's drops.
+    pub(super) fn native_spawn_item(
+        &mut self,
+        item: &str,
+        count: u32,
+        position: [f64; 3],
+        velocity: [f64; 3],
+    ) {
+        self.spawn_item(ItemStack::new(item, count), position, velocity, 10);
+    }
+    /// The most of `item` a stack holds (64 for an unknown item).
+    pub(super) fn native_max_stack(&self, item: &str) -> u32 {
+        self.res.items().get(item).map_or(64, |i| i.max_stack)
+    }
+    /// What cooking one `item` gives in a recipe of type `kind`
+    /// (`minecraft:smelting`, `minecraft:smoking`, `minecraft:blasting`,
+    /// `minecraft:campfire_cooking`): the result and its count.
+    pub(super) fn native_cook(&self, kind: &str, item: &str) -> Option<(String, u32)> {
+        let cooking = self.res.recipes().cook(kind, &ItemStack::new(item, 1))?;
+        Some((cooking.result.item.to_string(), cooking.result.count))
+    }
+    /// The item in the hand acting now (the one `native_use_block` names)
+    /// and its count.
+    pub(super) fn native_held(&self) -> Option<(String, u32)> {
+        let stack = self.held()?;
+        Some((stack.item.to_string(), stack.count))
+    }
+    /// Whether the player acting now sneaks (holds sneak).
+    pub(super) fn native_sneaking(&self) -> bool {
+        self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
+    }
+    /// A value mod `mod_id` keeps with the world under `key` (Fabric's
+    /// world attachments), saved with the world.
+    pub(super) fn native_world_data(&mut self, mod_id: &str, key: &str) -> Option<String> {
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        self.native_data.world(mod_id, key).map(str::to_owned)
+    }
+    /// Keep `value` under `key` with the world, or forget it (None).
+    pub(super) fn native_set_world_data(&mut self, mod_id: &str, key: &str, value: Option<&str>) {
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        self.native_data.set_world(mod_id, key, value);
+    }
+    /// A value mod `mod_id` keeps on the block at `pos` (Fabric's block
+    /// entity attachments, for any block): None once another block took
+    /// its place, or where nothing is resident.
+    pub(super) fn native_block_data(
+        &mut self,
+        pos: [i32; 3],
+        mod_id: &str,
+        key: &str,
+    ) -> Option<String> {
+        let block = self.native_resident_block(pos)?;
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        let level = self.dim.id();
+        let value = self.native_data.block(level, pos, &block, mod_id, key)?;
+        Some(value.to_owned())
+    }
+    /// Keep `value` on the block at `pos` until it is replaced, or forget it
+    /// (None). False where nothing is resident.
+    pub(super) fn native_set_block_data(
+        &mut self,
+        pos: [i32; 3],
+        mod_id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> bool {
+        let Some(block) = self.native_resident_block(pos) else {
+            return false;
+        };
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        let level = self.dim.id();
+        self.native_data
+            .set_block(level, pos, &block, mod_id, key, value);
+        true
+    }
+    /// The block's name at `pos`, where its chunk is resident.
+    fn native_resident_block(&self, pos: [i32; 3]) -> Option<String> {
+        if !self.native_loaded(pos) {
+            return None;
+        }
+        let state = self.native_block(pos);
+        self.native_state_name(state).map(str::to_owned)
+    }
+    /// The type of entity `entity` (its network id) in the level in place
+    /// (`minecraft:pig`), None when there is none. Players aren't found.
+    pub(super) fn native_entity_type(&self, entity: i32) -> Option<String> {
+        let target = self.native_target(entity)?;
+        Some(self.target_type(target))
+    }
+    /// Where entity `entity` is (its feet).
+    pub(super) fn native_entity_position(&self, entity: i32) -> Option<[f64; 3]> {
+        let target = self.native_target(entity)?;
+        self.target_position(target)
+    }
+    /// The player whose action, command or damage runs now on a server:
+    /// their connection, name and uuid.
+    pub(super) fn native_acting_player(&self) -> Option<(u32, String, u128)> {
+        let conn = self.lan_acting?;
+        let name = self.lan_acting_name.clone()?;
+        Some((conn, name, self.lan_acting_uuid?))
+    }
+    /// The players on the server (`native_player_join` to
+    /// `native_player_leave`): connection, name and uuid.
+    pub(super) fn native_players(&self) -> Vec<(u32, String, u128)> {
+        let players = self.native_events.players.iter();
+        players.map(|(c, (n, u))| (*c, n.clone(), *u)).collect()
+    }
+    /// The permission level (0 to 4) of the command running now: mod
+    /// commands get no check of their own.
+    pub(super) fn native_permission(&self) -> u8 {
+        self.ui.registries.permission
+    }
+    /// Send `data` on `channel` (`mod:name`) to player `to` (on a server)
+    /// or to the server (None, on a client), at the end of the tick. False
+    /// for a bad channel or one too big (32767 bytes to a server, 1 MiB to
+    /// a player). Unknown channels are dropped on the other side.
+    pub(super) fn native_send_payload(
+        &mut self,
+        to: Option<u32>,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        let max = match to {
+            Some(_) => native_events::MAX_TO_CLIENT,
+            None => native_events::MAX_TO_SERVER,
+        };
+        if !native_events::valid_channel(channel) || data.len() > max {
+            return false;
+        }
+        let payload = (to, channel.to_owned(), data.to_vec());
+        self.native_events.payloads.push(payload);
+        true
+    }
+    /// Move player `conn` to `pos` in `level` (`minecraft:the_end`) at the
+    /// end of the tick. False for an unknown level.
+    pub(super) fn native_teleport(&mut self, conn: u32, level: &str, pos: [f64; 3]) -> bool {
+        let dim = Dim::from_id(level);
+        if dim.id() != level || pos.iter().any(|v| !v.is_finite()) {
+            return false;
+        }
+        self.native_events.teleports.push((conn, dim, pos));
+        true
+    }
+    /// Hold players' chat for `native_allow_chat` (on), or send it at once
+    /// as vanilla does (off, the default).
+    pub(super) fn native_filter_chat(&mut self, on: bool) {
+        self.native_events.filter_chat = on;
+    }
+    /// Make `item` a furnace fuel burning `ticks` (FuelRegistry), or leave
+    /// it to its components (None). For every game of the process.
+    pub(super) fn native_set_fuel(&self, item: &str, ticks: Option<i32>) {
+        horizon_client::items::set_mod_fuel(item, ticks);
+    }
+    /// Make an axe strip block `from` into block `to`, keeping the properties
+    /// they share (StrippableBlockRegistry), or (None) leave it to the data.
+    pub(super) fn native_set_strippable(&self, from: &str, to: Option<&str>) {
+        horizon_client::items::set_mod_strippable(from, to);
+    }
+    /// Make a hoe till block `from` into block `to` (TillableBlockRegistry).
+    pub(super) fn native_set_tillable(&self, from: &str, to: Option<&str>) {
+        horizon_client::items::set_mod_tillable(from, to);
+    }
+    /// Make block `name` burn with fire odds (burn, ignite), as
+    /// `FireBlock.setFlammable` (FlammableBlockRegistry), or (None) leave it
+    /// to its own.
+    pub(super) fn native_set_flammable(&self, name: &str, odds: Option<(i32, i32)>) {
+        horizon_world::level::flammable::set_mod_flammable(name, odds);
+    }
+    /// Make `item` compostable with `chance` (CompostingChanceRegistry), or
+    /// leave it to its components (None).
+    pub(super) fn native_set_compostable(&self, item: &str, chance: Option<f32>) {
+        horizon_client::items::set_mod_compostable(item, chance);
+    }
+    /// The items of the container at `pos` (Fabric's transfer API: chests,
+    /// barrels, furnaces, hoppers, brewing stands... a double chest as one),
+    /// slot by slot; None where no container is.
+    pub(super) fn native_container_items(&self, pos: [i32; 3]) -> Option<Vec<Option<ItemStack>>> {
+        self.container_slots_at((pos[0], pos[1], pos[2]))
+    }
+    /// Put `stack` into the container at `pos` through its side `face` (a
+    /// unit vector: a furnace's top takes what it cooks, its sides fuel), as
+    /// a hopper does. What didn't fit comes back.
+    pub(super) fn native_insert_item(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        let Some(face) = Direction::ALL.into_iter().find(|d| d.normal() == face) else {
+            return Some(stack);
+        };
+        self.container_insert_at((pos[0], pos[1], pos[2]), face, stack)
+    }
+    /// Take up to `max` items of one stack out of the container at `pos`
+    /// through its side `face`, as a hopper would.
+    pub(super) fn native_extract_item(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        max: u32,
+    ) -> Option<ItemStack> {
+        let face = Direction::ALL.into_iter().find(|d| d.normal() == face)?;
+        self.container_extract_at((pos[0], pos[1], pos[2]), face, max)
+    }
+    /// The block entities of resident chunk `chunk` with their types
+    /// (`minecraft:furnace`): what Fabric's block entity load event gives,
+    /// asked when `native_chunk` says the chunk came.
+    pub(super) fn native_block_entities(&self, chunk: [i32; 2]) -> Vec<([i32; 3], &'static str)> {
+        let mut found = Vec::new();
+        for p in self.world.block_entities.keys() {
+            if (p.0 >> 4, p.2 >> 4) != (chunk[0], chunk[1]) || !self.native_loaded([p.0, p.1, p.2])
+            {
+                continue;
+            }
+            let pos = [p.0, p.1, p.2];
+            let name = self.native_state_name(self.native_block(pos));
+            if let Some(kind) = name.and_then(horizon_client::lan::chunks::block_entity_type) {
+                found.push((pos, kind));
+            }
+        }
+        found.sort();
+        found
+    }
+    /// Play sound event `sound` (`minecraft:block.anvil.use`) at `pos` for the
+    /// players near it, as the game plays its own.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        pos: [f64; 3],
+        volume: f32,
+        pitch: f32,
+    ) {
+        self.audio.play(sound, Some(pos), volume, pitch);
+    }
+    /// Show `count` particles of type `kind` (`minecraft:smoke`; types that
+    /// need more data aren't taken) around `pos`, spread up to `spread` on
+    /// each axis, to the players near it. False for an unknown type.
+    pub(super) fn native_particles(
+        &mut self,
+        kind: &str,
+        pos: [f64; 3],
+        count: u32,
+        spread: [f64; 3],
+    ) -> bool {
+        let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) else {
+            return false;
+        };
+        let options = horizon_client::particles::ParticleOptions::simple(ty);
+        self.lan_send_particles(&options, pos, spread, 0.0, count);
+        true
+    }
+    /// Add game rule `name` (`mymod:rule`, in the mod's own namespace) with
+    /// its default (GameRuleRegistry): `/gamerule` reads and sets it for game
+    /// masters, every player's command tree suggests it, and its value is
+    /// kept with the world. False for a bad name or one taken.
+    pub(super) fn native_register_game_rule(
+        &mut self,
+        name: &str,
+        default: NativeRuleValue,
+    ) -> bool {
+        let Some((namespace, path)) = name.split_once(':') else {
+            return false;
+        };
+        let part = |s: &str| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'.')
+        };
+        if namespace == "minecraft" || !part(namespace) || !part(path) {
+            return false;
+        }
+        if self.native_events.rules.contains_key(name) {
+            return false;
+        }
+        self.native_events.rules.insert(name.to_owned(), default);
+        true
+    }
+    /// The value of a mod's game rule: the world's, else its default.
+    pub(super) fn native_game_rule(&mut self, name: &str) -> Option<NativeRuleValue> {
+        let default = *self.native_events.rules.get(name)?;
+        let mut key = String::from("gamerule:");
+        key.push_str(name);
+        let saved = self.native_world_data("horizon", &key);
+        let value = match (saved.as_deref(), default) {
+            (Some("true"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(true),
+            (Some("false"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(false),
+            (Some(n), NativeRuleValue::Int(_)) => n.parse().map_or(default, NativeRuleValue::Int),
+            _ => default,
+        };
+        Some(value)
+    }
+    /// Answer the command being run (`native_command`), as its source's
+    /// feedback: red when `error`. Outside a command it shows only in the
+    /// window of the `Game` that runs it.
+    pub(super) fn native_reply(&mut self, text: &str, error: bool) {
+        let text = horizon_client::text::Text::literal(text);
+        if error {
+            self.command_failure(text);
+        } else {
+            self.system_message(text);
+        }
+    }
+}

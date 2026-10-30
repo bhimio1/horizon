@@ -1081,3 +1081,33 @@ fn a_replacing_mod_tag_reaches_the_root() {
     );
     let _ = fs::remove_dir_all(&scratch);
 }
+
+#[test]
+fn load_conditions_leave_out_files_for_mods_not_there() {
+    let loaded = |id: &str| id == "create";
+    let plain = br#"{"type": "minecraft:crafting_shaped"}"#;
+    assert!(super::load_conditions_pass(plain, &loaded));
+    let with = |c: &str| format!(r#"{{"horizon:load_conditions": [{c}], "type": "x"}}"#);
+    let mods = |m: &str| format!(r#"{{"condition": "horizon:mods_loaded", "mods": ["{m}"]}}"#);
+    assert!(super::load_conditions_pass(
+        with(&mods("create")).as_bytes(),
+        &loaded
+    ));
+    assert!(!super::load_conditions_pass(
+        with(&mods("other")).as_bytes(),
+        &loaded
+    ));
+    let not = format!(
+        r#"{{"condition": "horizon:not", "value": {}}}"#,
+        mods("other")
+    );
+    assert!(super::load_conditions_pass(with(&not).as_bytes(), &loaded));
+    let any = format!(
+        r#"{{"condition": "horizon:any_of", "values": [{}, {}]}}"#,
+        mods("other"),
+        mods("create")
+    );
+    assert!(super::load_conditions_pass(with(&any).as_bytes(), &loaded));
+    let unknown = with(r#"{"condition": "x:y"}"#);
+    assert!(!super::load_conditions_pass(unknown.as_bytes(), &loaded));
+}

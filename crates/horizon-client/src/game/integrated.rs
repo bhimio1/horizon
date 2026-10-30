@@ -534,6 +534,7 @@ impl Game<'_> {
         if let Some(s) = self.serving.take() {
             s.flags.published.store(0, Ordering::Relaxed);
         }
+        self.native_server_stopping();
         if let Some(mut host) = self.lan.take() {
             // PlayerList.removeAll: the owner and every guest leave the game.
             host.award_leave_game_to_all();
@@ -553,6 +554,7 @@ impl Game<'_> {
         // ServerPlayer.disconnect: nobody is left in a bed.
         self.free_player_beds()?;
         self.save_game()?;
+        self.native_levels_closed();
         self.lan_close(false);
         self.save.flush()?;
         // `WorldCloseFinal` follows a successful final save.

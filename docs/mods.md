@@ -106,6 +106,11 @@ The fence: files go in the mod's own namespaces (`assets/<id>/`,
 share (`data/c/tags/`).
 Templates and `sounds` name vanilla blocks; unknown keys are refused.
 
+A data file (a recipe, a loot table, a tag...) can load only with other content mods, as Fabric's resource
+conditions do: `"horizon:load_conditions": [{"condition": "horizon:mods_loaded", "mods": ["create"]}]` at its top
+level. Every condition must pass; they are `horizon:mods_loaded`, `horizon:not` (`value`), `horizon:all_of` and
+`horizon:any_of` (`values`), and `horizon:true`.
+
 Some Java mods ship their files under other names than their mod id (Towns and Towers, mod id `t_and_t`, under
 `kaisyn` and `towns_and_towers`). A content mod lists those in its manifest:
 

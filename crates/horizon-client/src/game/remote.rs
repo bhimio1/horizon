@@ -3053,6 +3053,7 @@ impl Game<'_> {
             {
                 self.handle_command_suggestions(&data);
             }
+            C::CustomPayload(p) => self.native_payload(None, &p.channel, &p.data),
             C::Commands(p) => {
                 let tree = horizon_client::command::network::from_packet(
                     &p,
@@ -4017,6 +4018,7 @@ impl Game<'_> {
         // Client mods tick on any server, single player's own included.
         self.native_tick();
         self.tell_native_now();
+        self.native_remote_tick();
         // Minecraft.tick sends this even when the player cannot tick yet,
         // including while waiting for chunks. Keep it outside early returns.
         if self.remote.as_ref().is_some_and(|r| r.joined) {
