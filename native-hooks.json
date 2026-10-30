@@ -84,6 +84,11 @@
       "name": "chunk",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_chunk"
+    },
+    {
+      "name": "save",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_save"
     }
   ]
 }

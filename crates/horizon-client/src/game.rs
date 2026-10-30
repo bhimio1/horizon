@@ -156,6 +156,7 @@ mod mounts;
 mod moving_pistons;
 mod music;
 mod names;
+mod native_data;
 mod native_hooks;
 mod native_lifecycle;
 mod native_panel;
@@ -1980,6 +1981,8 @@ struct Game<'a> {
     native_lifecycle: native_lifecycle::NativeLifecycle,
     /// The states native mods watch (`native_watch_block`), by id.
     native_watched: Vec<bool>,
+    /// What native mods keep with the world (`native_world_data`).
+    native_data: native_data::NativeData,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -12152,6 +12155,8 @@ impl Game<'_> {
         self.save_bossbars();
         self.save_schedule();
         self.save_warden_tracker();
+        self.native_save();
+        self.save_native_data()?;
         self.sync_level();
         self.store_owner();
         self.level.write(&self.world_root)?;
@@ -14787,6 +14792,7 @@ impl<'a> Game<'a> {
             native_shaders: Default::default(),
             native_lifecycle: Default::default(),
             native_watched: Vec::new(),
+            native_data: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

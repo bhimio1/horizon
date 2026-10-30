@@ -200,6 +200,62 @@ impl Game<'_> {
     pub(super) fn native_sneaking(&self) -> bool {
         self.keys.contains(&winit::keyboard::KeyCode::ShiftLeft)
     }
+    /// A value mod `mod_id` keeps with the world under `key` (Fabric's
+    /// world attachments), saved with the world.
+    pub(super) fn native_world_data(&mut self, mod_id: &str, key: &str) -> Option<String> {
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        self.native_data.world(mod_id, key).map(str::to_owned)
+    }
+    /// Keep `value` under `key` with the world, or forget it (None).
+    pub(super) fn native_set_world_data(&mut self, mod_id: &str, key: &str, value: Option<&str>) {
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        self.native_data.set_world(mod_id, key, value);
+    }
+    /// A value mod `mod_id` keeps on the block at `pos` (Fabric's block
+    /// entity attachments, for any block): None once another block took
+    /// its place, or where nothing is resident.
+    pub(super) fn native_block_data(
+        &mut self,
+        pos: [i32; 3],
+        mod_id: &str,
+        key: &str,
+    ) -> Option<String> {
+        let block = self.native_resident_block(pos)?;
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        let level = self.dim.id();
+        let value = self.native_data.block(level, pos, &block, mod_id, key)?;
+        Some(value.to_owned())
+    }
+    /// Keep `value` on the block at `pos` until it is replaced, or forget it
+    /// (None). False where nothing is resident.
+    pub(super) fn native_set_block_data(
+        &mut self,
+        pos: [i32; 3],
+        mod_id: &str,
+        key: &str,
+        value: Option<&str>,
+    ) -> bool {
+        let Some(block) = self.native_resident_block(pos) else {
+            return false;
+        };
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        let level = self.dim.id();
+        self.native_data
+            .set_block(level, pos, &block, mod_id, key, value);
+        true
+    }
+    /// The block's name at `pos`, where its chunk is resident.
+    fn native_resident_block(&self, pos: [i32; 3]) -> Option<String> {
+        if !self.native_loaded(pos) {
+            return None;
+        }
+        let state = self.native_block(pos);
+        self.native_state_name(state).map(str::to_owned)
+    }
     /// Answer the command being run (`native_command`), as its source's
     /// feedback: red when `error`. Outside a command it shows only in the
     /// window of the `Game` that runs it.

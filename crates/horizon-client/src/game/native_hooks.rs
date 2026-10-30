@@ -380,6 +380,10 @@ impl Game<'_> {
     pub(super) fn native_chunk(&mut self, chunk: [i32; 2], loaded: bool) {
         let _ = (chunk, loaded);
     }
+    /// The world is being saved (each autosave, `/save-all`, the save on
+    /// close): write what the mod keeps, with `native_set_world_data` or
+    /// in `native_world_dir`. Where `native_level_tick` fires. API 4.
+    pub(super) fn native_save(&mut self) {}
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
