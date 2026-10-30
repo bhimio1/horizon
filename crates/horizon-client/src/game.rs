@@ -10363,6 +10363,29 @@ impl Game<'_> {
             registry,
             pos,
         };
+        // A native mod's strippable or tillable block first (Fabric's
+        // StrippableBlockRegistry, TillableBlockRegistry).
+        let here = around.state([0, 0, 0]);
+        let modded = match id.as_str() {
+            "minecraft:axe" => horizon_client::items::mod_strippable(&here.name)
+                .map(|to| (to, "minecraft:item.axe.strip")),
+            "minecraft:hoe"
+                if face_name != "down" && around.state([0, 1, 0]).name == "minecraft:air" =>
+            {
+                horizon_client::items::mod_tillable(&here.name)
+                    .map(|to| (to, "minecraft:item.hoe.till"))
+            }
+            _ => None,
+        };
+        if let Some((to, sound)) = modded {
+            let to = horizon_world::chunk::BlockState {
+                name: to,
+                properties: Default::default(),
+            };
+            let to = horizon_client::block_transform::with_properties_of(registry, to, &here)?;
+            let new = registry.resolve(&to).ok()?;
+            return Some((new, sound.into(), None, 1, "none".into()));
+        }
         let (_, t, state) =
             self.res
                 .transformers()

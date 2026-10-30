@@ -43,6 +43,40 @@ pub fn set_mod_compostable(item: &str, chance: Option<f32>) {
         None => compostables.remove(item),
     };
 }
+/// Blocks native mods strip with an axe (`StrippableBlockRegistry`) and till
+/// with a hoe (`TillableBlockRegistry`): the block each turns into.
+static MOD_STRIPPABLES: RwLock<BTreeMap<String, String>> = RwLock::new(BTreeMap::new());
+static MOD_TILLABLES: RwLock<BTreeMap<String, String>> = RwLock::new(BTreeMap::new());
+
+fn set_in(table: &RwLock<BTreeMap<String, String>>, from: &str, to: Option<&str>) {
+    let mut table = table.write().unwrap_or_else(|e| e.into_inner());
+    match to {
+        Some(t) => table.insert(from.to_owned(), t.to_owned()),
+        None => table.remove(from),
+    };
+}
+fn get_in(table: &RwLock<BTreeMap<String, String>>, from: &str) -> Option<String> {
+    let table = table.read().unwrap_or_else(|e| e.into_inner());
+    table.get(from).cloned()
+}
+/// Make an axe strip block `from` into `to` (its matching properties, such
+/// as `axis`, kept), or (None) leave it to the data.
+pub fn set_mod_strippable(from: &str, to: Option<&str>) {
+    set_in(&MOD_STRIPPABLES, from, to);
+}
+/// The block a native mod strips `from` into.
+pub fn mod_strippable(from: &str) -> Option<String> {
+    get_in(&MOD_STRIPPABLES, from)
+}
+/// Make a hoe till block `from` into `to` (from any face but the bottom,
+/// with air above), or (None) leave it to the data.
+pub fn set_mod_tillable(from: &str, to: Option<&str>) {
+    set_in(&MOD_TILLABLES, from, to);
+}
+/// The block a native mod tills `from` into.
+pub fn mod_tillable(from: &str) -> Option<String> {
+    get_in(&MOD_TILLABLES, from)
+}
 /// The composting chance a native mod gave `item`.
 pub fn mod_compostable(item: &str) -> Option<f32> {
     let compostables = MOD_COMPOSTABLES.read().unwrap_or_else(|e| e.into_inner());

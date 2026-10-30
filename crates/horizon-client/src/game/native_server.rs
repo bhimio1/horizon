@@ -59,6 +59,14 @@ pub(crate) enum NativeFluid {
     Lava,
 }
 
+/// A game rule's value (`native_register_game_rule`).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeRuleValue {
+    Bool(bool),
+    Int(i32),
+}
+
 /// A dropped item as a native mod reads it (`native_items_in`) and writes
 /// it back (`native_update_item`).
 #[allow(dead_code)]
@@ -434,6 +442,21 @@ impl Game<'_> {
     pub(super) fn native_set_fuel(&self, item: &str, ticks: Option<i32>) {
         horizon_client::items::set_mod_fuel(item, ticks);
     }
+    /// Make an axe strip block `from` into block `to`, keeping the properties
+    /// they share (StrippableBlockRegistry), or (None) leave it to the data.
+    pub(super) fn native_set_strippable(&self, from: &str, to: Option<&str>) {
+        horizon_client::items::set_mod_strippable(from, to);
+    }
+    /// Make a hoe till block `from` into block `to` (TillableBlockRegistry).
+    pub(super) fn native_set_tillable(&self, from: &str, to: Option<&str>) {
+        horizon_client::items::set_mod_tillable(from, to);
+    }
+    /// Make block `name` burn with fire odds (burn, ignite), as
+    /// `FireBlock.setFlammable` (FlammableBlockRegistry), or (None) leave it
+    /// to its own.
+    pub(super) fn native_set_flammable(&self, name: &str, odds: Option<(i32, i32)>) {
+        horizon_world::level::flammable::set_mod_flammable(name, odds);
+    }
     /// Make `item` compostable with `chance` (CompostingChanceRegistry), or
     /// leave it to its components (None).
     pub(super) fn native_set_compostable(&self, item: &str, chance: Option<f32>) {
@@ -475,7 +498,7 @@ impl Game<'_> {
     /// asked when `native_chunk` says the chunk came.
     pub(super) fn native_block_entities(&self, chunk: [i32; 2]) -> Vec<([i32; 3], &'static str)> {
         let mut found = Vec::new();
-        for (p, _) in self.world.block_entities.iter() {
+        for p in self.world.block_entities.keys() {
             if (p.0 >> 4, p.2 >> 4) != (chunk[0], chunk[1]) || !self.native_loaded([p.0, p.1, p.2])
             {
                 continue;
@@ -516,6 +539,46 @@ impl Game<'_> {
         let options = horizon_client::particles::ParticleOptions::simple(ty);
         self.lan_send_particles(&options, pos, spread, 0.0, count);
         true
+    }
+    /// Add game rule `name` (`mymod:rule`, in the mod's own namespace) with
+    /// its default (GameRuleRegistry): `/gamerule` reads and sets it for game
+    /// masters, every player's command tree suggests it, and its value is
+    /// kept with the world. False for a bad name or one taken.
+    pub(super) fn native_register_game_rule(
+        &mut self,
+        name: &str,
+        default: NativeRuleValue,
+    ) -> bool {
+        let Some((namespace, path)) = name.split_once(':') else {
+            return false;
+        };
+        let part = |s: &str| {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'.')
+        };
+        if namespace == "minecraft" || !part(namespace) || !part(path) {
+            return false;
+        }
+        if self.native_events.rules.contains_key(name) {
+            return false;
+        }
+        self.native_events.rules.insert(name.to_owned(), default);
+        true
+    }
+    /// The value of a mod's game rule: the world's, else its default.
+    pub(super) fn native_game_rule(&mut self, name: &str) -> Option<NativeRuleValue> {
+        let default = *self.native_events.rules.get(name)?;
+        let mut key = String::from("gamerule:");
+        key.push_str(name);
+        let saved = self.native_world_data("horizon", &key);
+        let value = match (saved.as_deref(), default) {
+            (Some("true"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(true),
+            (Some("false"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(false),
+            (Some(n), NativeRuleValue::Int(_)) => n.parse().map_or(default, NativeRuleValue::Int),
+            _ => default,
+        };
+        Some(value)
     }
     /// Answer the command being run (`native_command`), as its source's
     /// feedback: red when `error`. Outside a command it shows only in the

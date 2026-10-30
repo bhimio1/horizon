@@ -4,10 +4,11 @@
 //! network tick holds the host. Nothing here is a hook point.
 use super::commands::Target;
 use super::lan::LanHost;
-use super::native_server::NativeUse;
+use super::native_server::{NativeRuleValue, NativeUse};
 use super::server_travel::LevelTeleport;
 use super::{Dim, Game};
 use horizon_client::mobs::{Damage, Who};
+use horizon_client::text::Text;
 use horizon_protocol::packets::{
     configuration::CustomPayload,
     play::{Clientbound as C, Serverbound as S},
@@ -32,6 +33,8 @@ pub(super) struct NativeEvents {
     /// Whether a mod reads players' chat before it goes out
     /// (`native_filter_chat`).
     pub(super) filter_chat: bool,
+    /// The mods' game rules and their defaults (`native_register_game_rule`).
+    pub(super) rules: BTreeMap<String, NativeRuleValue>,
     /// The players on the server, by connection: name and uuid.
     pub(super) players: BTreeMap<u32, (String, u128)>,
 }
@@ -59,6 +62,14 @@ fn valid_command(name: &str) -> bool {
         && name
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c))
+}
+
+/// A game rule's value as `/gamerule` writes it.
+pub(super) fn rule_text(value: NativeRuleValue) -> String {
+    match value {
+        NativeRuleValue::Bool(b) => b.to_string(),
+        NativeRuleValue::Int(n) => n.to_string(),
+    }
 }
 
 /// Whether `node` is a command node in the commands report's format: a
@@ -89,7 +100,11 @@ fn valid_node(node: &Value, depth: usize) -> bool {
 /// The tree of the mods' commands in the commands report's format: each
 /// name runs alone or with any text after it (a greedy string), unless its
 /// mod gave its syntax.
-pub(super) fn command_tree(names: &[String], syntax: &[(String, Value)]) -> Value {
+pub(super) fn command_tree(
+    names: &[String],
+    syntax: &[(String, Value)],
+    rules: &BTreeMap<String, NativeRuleValue>,
+) -> Value {
     let mut children = Map::new();
     for name in names {
         let mut args = Map::new();
@@ -109,6 +124,36 @@ pub(super) fn command_tree(names: &[String], syntax: &[(String, Value)]) -> Valu
     }
     for (name, node) in syntax {
         children.insert(name.clone(), node.clone());
+    }
+    // The mods' game rules, under vanilla's `/gamerule` (for game masters).
+    if !rules.is_empty() {
+        let mut rule_nodes = Map::new();
+        for (name, default) in rules {
+            let parser = match default {
+                NativeRuleValue::Bool(_) => "brigadier:bool",
+                NativeRuleValue::Int(_) => "brigadier:integer",
+            };
+            let mut value = Map::new();
+            value.insert("type".into(), "argument".into());
+            value.insert("parser".into(), parser.into());
+            value.insert("executable".into(), true.into());
+            let mut value_child = Map::new();
+            value_child.insert("value".into(), Value::Object(value));
+            let mut rule = Map::new();
+            rule.insert("type".into(), "literal".into());
+            rule.insert("executable".into(), true.into());
+            rule.insert("children".into(), Value::Object(value_child));
+            rule_nodes.insert(name.clone(), Value::Object(rule));
+        }
+        let mut level = Map::new();
+        level.insert("level".into(), "gamemasters".into());
+        let mut permission = Map::new();
+        permission.insert("permission".into(), Value::Object(level));
+        let mut gamerule = Map::new();
+        gamerule.insert("type".into(), "literal".into());
+        gamerule.insert("permissions".into(), Value::Object(permission));
+        gamerule.insert("children".into(), Value::Object(rule_nodes));
+        children.insert("gamerule".into(), Value::Object(gamerule));
     }
     let mut root = Map::new();
     root.insert("type".into(), "root".into());
@@ -184,6 +229,9 @@ impl Game<'_> {
         written.dedup_by(|a, b| a.0 == b.0);
         let mut hasher = DefaultHasher::new();
         (&names, &written).hash(&mut hasher);
+        for (name, default) in &self.native_events.rules {
+            (name, rule_text(*default)).hash(&mut hasher);
+        }
         let key = hasher.finish();
         // With no mod commands, the tree stays as it was sent.
         let unchanged = host
@@ -204,8 +252,8 @@ impl Game<'_> {
                     ),
                 }
             }
-            host.hub
-                .set_mod_commands(key, command_tree(&names, &syntax));
+            let tree = command_tree(&names, &syntax, &self.native_events.rules);
+            host.hub.set_mod_commands(key, tree);
         }
         for (to, channel, data) in std::mem::take(&mut self.native_events.payloads) {
             if let Some(conn) = to {
@@ -305,6 +353,52 @@ impl Game<'_> {
         }
     }
 
+    /// `/gamerule <rule> [value]` for a mod's rule, where the world runs:
+    /// whether it was one.
+    pub(super) fn native_rule_command(&mut self, command: &str) -> bool {
+        let mut words = command.trim_start_matches('/').split_whitespace();
+        let (Some("gamerule"), Some(name)) = (words.next(), words.next()) else {
+            return false;
+        };
+        let Some(&default) = self.native_events.rules.get(name) else {
+            return false;
+        };
+        if self.remote.is_some() {
+            return false;
+        }
+        if self.ui.registries.permission < 2 {
+            self.command_failure(Text::translate("command.unknown.command", &[]));
+            return true;
+        }
+        let name = name.to_owned();
+        let value = match (words.next(), default) {
+            (None, _) => {
+                let now = self.native_game_rule(&name).unwrap_or(default);
+                let args = [Text::literal(name.clone()), Text::literal(rule_text(now))];
+                self.feedback(Text::translate("commands.gamerule.query", &args));
+                return true;
+            }
+            (Some("true"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(true),
+            (Some("false"), NativeRuleValue::Bool(_)) => NativeRuleValue::Bool(false),
+            (Some(n), NativeRuleValue::Int(_)) if n.parse::<i32>().is_ok() => {
+                NativeRuleValue::Int(n.parse().unwrap_or(0))
+            }
+            (Some(other), _) => {
+                let what = Text::literal(format!("Invalid value for {name}: {other}"));
+                self.command_failure(what);
+                return true;
+            }
+        };
+        let root = self.world_root.clone();
+        self.native_data.open(&root);
+        let key = format!("gamerule:{name}");
+        self.native_data
+            .set_world("horizon", &key, Some(&rule_text(value)));
+        let args = [Text::literal(name), Text::literal(rule_text(value))];
+        self.feedback(Text::translate("commands.gamerule.set", &args));
+        true
+    }
+
     /// A client's tick: the mods' payloads to the server.
     pub(super) fn native_remote_tick(&mut self) {
         for (to, channel, data) in std::mem::take(&mut self.native_events.payloads) {
@@ -330,7 +424,7 @@ mod tests {
 
     #[test]
     fn mod_commands_run_alone_or_with_text() {
-        let tree = command_tree(&["create".into()], &[]);
+        let tree = command_tree(&["create".into()], &[], &BTreeMap::new());
         let create = &tree["children"]["create"];
         assert_eq!(create["type"], "literal");
         assert_eq!(create["executable"], true);
@@ -349,7 +443,16 @@ mod tests {
         )
         .unwrap();
         assert!(valid_node(&node, 0));
-        let tree = command_tree(&["create".into()], &[("create".into(), node)]);
+        let tree = command_tree(
+            &["create".into()],
+            &[("create".into(), node)],
+            &BTreeMap::new(),
+        );
+        let rules = BTreeMap::from([("mymod:rule".to_owned(), NativeRuleValue::Int(3))]);
+        let ruled = command_tree(&[], &[], &rules);
+        let rule = &ruled["children"]["gamerule"]["children"]["mymod:rule"];
+        assert_eq!(rule["children"]["value"]["parser"], "brigadier:integer");
+        assert_eq!(rule_text(NativeRuleValue::Bool(true)), "true");
         let rpm = &tree["children"]["create"]["children"]["motor"]["children"]["rpm"];
         assert_eq!(rpm["parser"], "brigadier:integer");
         assert!(tree["children"]["create"]["children"]["args"].is_null());

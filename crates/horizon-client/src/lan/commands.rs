@@ -222,6 +222,22 @@ fn fill(
         }
         path.push(name.clone());
         let argument = child["type"] == "argument";
+        // A literal already in the tree (a server mod's game rule under
+        // vanilla's `gamerule`) takes the new children, not a second node.
+        if !argument && let Some(&index) = paths.get(path.as_slice()) {
+            fill(
+                child,
+                index,
+                path,
+                level,
+                dedicated,
+                suggestions,
+                nodes,
+                paths,
+            );
+            path.pop();
+            continue;
+        }
         let index = nodes.len();
         nodes.push(Node {
             name: name.clone(),
@@ -400,6 +416,25 @@ mod tests {
         assert_eq!(beacon.children, [4]);
         let height = packet.nodes[4].parser.as_ref().unwrap();
         assert_eq!(height.1, vec![3, 0, 0, 0, 1, 0, 0, 0, 64]);
+        // A mod's literal under one of vanilla's joins it.
+        let report: Value = serde_json::from_str(
+            r#"{"type":"root","children":{"gamerule":{"type":"literal","permissions":{"permission":{"level":"gamemasters"}},
+                "children":{"keepInventory":{"type":"literal","executable":true}}}}}"#,
+        )
+        .unwrap();
+        let rules: Value = serde_json::from_str(
+            r#"{"type":"root","children":{"gamerule":{"type":"literal","permissions":{"permission":{"level":"gamemasters"}},
+                "children":{"mymod:rule":{"type":"literal","executable":true}}}}}"#,
+        )
+        .unwrap();
+        let ruled = CommandTree { root: report };
+        let packet = ruled.packet_with(2, true, &Builtin::default(), &rules);
+        let names: Vec<_> = packet.nodes.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, ["", "gamerule", "keepInventory", "mymod:rule"]);
+        assert_eq!(packet.nodes[1].children, [2, 3]);
+        // Players below its level see neither.
+        let packet = ruled.packet_with(0, true, &Builtin::default(), &rules);
+        assert_eq!(packet.nodes.len(), 1);
         // No mods: vanilla's tree as it is.
         assert_eq!(
             tree.packet_with(0, true, &Builtin::default(), &Value::Null)

@@ -815,6 +815,9 @@ impl Game<'_> {
     }
     /// A native mod's command.
     pub(super) fn client_mod_command(&mut self, command: &str) -> bool {
+        if self.native_rule_command(command) {
+            return true;
+        }
         let mut ran = false;
         self.native_command(command, &mut ran);
         ran

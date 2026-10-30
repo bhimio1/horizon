@@ -97,6 +97,7 @@ use std::{collections::HashMap, io, path::Path, sync::Arc, sync::Mutex};
 
 pub mod classes;
 pub mod data;
+pub mod flammable;
 pub mod states;
 pub mod ticks;
 

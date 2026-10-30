@@ -1166,11 +1166,20 @@ pub fn build(base: &Path, mods: &[ContentMod], out: &Path) -> Result<Vec<String>
     let mut warnings = Vec::new();
     let mut worldgen: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
     let mut additions: BTreeMap<&str, Vec<Addition>> = BTreeMap::new();
+    let ids: std::collections::BTreeSet<&str> = mods.iter().map(|m| m.id.as_str()).collect();
+    let loaded = |id: &str| ids.contains(id);
     for m in mods {
         let declarations = format!("data/{}/horizon/", m.id);
         let mut reader = m.content.reader()?;
         for file in &m.content.files {
             let bytes = reader.read(file)?;
+            // A data file whose load conditions fail is left out, tags included.
+            if file.starts_with("data/")
+                && file.ends_with(".json")
+                && !load_conditions_pass(&bytes, &loaded)
+            {
+                continue;
+            }
             let is_tag = file.starts_with("data/") && file.contains("/tags/");
             if is_tag && file.ends_with(".json") {
                 let doc: J = serde_json::from_slice(&bytes).map_err(|e| format!("{file}: {e}"))?;
@@ -1414,6 +1423,38 @@ fn stamp(base: &Path, mods: &[ContentMod]) -> Result<String> {
         hasher.update(part.as_bytes());
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// A data file's load conditions (Fabric's `fabric:load_conditions`), all of
+/// which must pass: `"horizon:load_conditions": [{"condition":
+/// "horizon:mods_loaded", "mods": ["create"]}]`. The conditions are
+/// `horizon:mods_loaded` (every content mod named is in the game),
+/// `horizon:not` (`value`), `horizon:all_of` and `horizon:any_of` (`values`)
+/// and `horizon:true`; an unknown one fails. Files without them load.
+pub fn load_conditions_pass(bytes: &[u8], loaded: &dyn Fn(&str) -> bool) -> bool {
+    const KEY: &str = "horizon:load_conditions";
+    if !bytes.windows(KEY.len()).any(|w| w == KEY.as_bytes()) {
+        return true;
+    }
+    fn pass(c: &serde_json::Value, loaded: &dyn Fn(&str) -> bool) -> bool {
+        let list = |key: &str| c[key].as_array().into_iter().flatten();
+        match c["condition"].as_str() {
+            Some("horizon:true") => true,
+            Some("horizon:mods_loaded") => {
+                let mut mods = c["mods"].as_array().into_iter().flatten();
+                mods.all(|m| m.as_str().is_some_and(loaded))
+            }
+            Some("horizon:not") => !pass(&c["value"], loaded),
+            Some("horizon:all_of") => list("values").all(|c| pass(c, loaded)),
+            Some("horizon:any_of") => list("values").any(|c| pass(c, loaded)),
+            _ => false,
+        }
+    }
+    // A file that isn't JSON is left to the loaders to refuse.
+    let Ok(doc) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return true;
+    };
+    (doc[KEY].as_array().into_iter().flatten()).all(|c| pass(c, loaded))
 }
 
 #[cfg(test)]
