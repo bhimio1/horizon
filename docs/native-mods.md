@@ -77,12 +77,14 @@ the window. How each part of Fabric maps to these: [fabric-parity.md](fabric-par
 
 The helpers (`crates/horizon-client/src/game/native_server.rs`):
 - **The level:** `native_level`, `native_world_dir`, `native_loaded`, `native_block`, `native_set_block`,
-  `native_break_block`, `native_powered`, `native_watch_block`.
-- **Block states by name and property:** `native_state_name`, `native_state_property`, `native_default_state`,
-  `native_state_with`.
+  `native_break_block`, `native_powered`, `native_watch_block`, and the watched blocks of a chunk that came
+  (`native_watched_blocks`, which skips sections whose palette holds none).
+- **Block states:** by name and property (`native_state_name`, `native_state_property`, `native_default_state`,
+  `native_state_with`), all of them (`native_state_count`), their facts (`native_state_facts`: air, hardness,
+  collision, light, fluid) and tags (`native_block_tagged`).
 - **Entities and items:** `native_entity_type`, `native_entity_position`, dropped items (`native_items_in`,
   `native_update_item`, `native_spawn_item`), `native_max_stack`, cooking recipes (`native_cook`).
-- **Players:** `native_players`, `native_acting_player`, `native_held`, `native_sneaking`, `native_permission`,
+- **Players:** `native_players`, `native_acting_player`, `native_held`, `native_sneaking`, `native_look`, `native_permission`,
   `native_teleport`, and a command's reply (`native_reply`).
 - **Data kept with the world** (Fabric's data attachments, in the world folder's `horizon-native-data.json`):
   `native_world_data`, `native_set_world_data`, and per block `native_block_data`, `native_set_block_data`, which

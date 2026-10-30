@@ -27,6 +27,35 @@ pub(crate) enum NativeUse {
     Fail,
 }
 
+/// A block state's facts as a native mod reads them (`native_state_facts`).
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct NativeStateFacts {
+    pub(crate) air: bool,
+    /// `destroyTime`: -1 for unbreakable blocks.
+    pub(crate) hardness: f32,
+    pub(crate) explosion_resistance: f32,
+    /// Whether its collision is the full cube.
+    pub(crate) full_collision: bool,
+    /// Whether placing a block may replace it (grass, water...).
+    pub(crate) replaceable: bool,
+    /// The light it gives, 0 to 15.
+    pub(crate) light: u8,
+    pub(crate) fluid: NativeFluid,
+    /// The fluid's amount, 1 to 8 (8 a source or falling), 0 with none.
+    pub(crate) fluid_level: u8,
+    pub(crate) fluid_falling: bool,
+}
+
+/// The fluid in a block state.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeFluid {
+    None,
+    Water,
+    Lava,
+}
+
 /// A dropped item as a native mod reads it (`native_items_in`) and writes
 /// it back (`native_update_item`).
 #[allow(dead_code)]
@@ -87,6 +116,82 @@ impl Game<'_> {
         let slot = s.properties.get_mut(key)?;
         *slot = value.to_owned();
         registry.id(&s)
+    }
+    /// The number of block states: ids run from 0 to this one, less one.
+    pub(super) fn native_state_count(&self) -> u32 {
+        self.pack.assets.registry.len() as u32
+    }
+    /// What state `state` is: air, hardness, collision, light and fluid;
+    /// None for an id past `native_state_count`.
+    pub(super) fn native_state_facts(&self, state: BlockStateId) -> Option<NativeStateFacts> {
+        if state.0 >= self.native_state_count() {
+            return None;
+        }
+        let facts = self.res.facts();
+        let f = facts.get(state);
+        let fluid = match f.fluid {
+            horizon_client::blocks::Fluid::None => NativeFluid::None,
+            horizon_client::blocks::Fluid::Water => NativeFluid::Water,
+            horizon_client::blocks::Fluid::Lava => NativeFluid::Lava,
+        };
+        Some(NativeStateFacts {
+            air: facts.is_air(state),
+            hardness: f.hardness,
+            explosion_resistance: f.explosion_resistance,
+            full_collision: f.full_collision,
+            replaceable: f.replaceable,
+            light: f.emission,
+            fluid,
+            fluid_level: f.fluid_level,
+            fluid_falling: f.fluid_falling,
+        })
+    }
+    /// Whether the block of `state` is in block tag `tag` (`minecraft:logs`;
+    /// `logs` means the same), the world's data packs included.
+    pub(super) fn native_block_tagged(&self, state: BlockStateId, tag: &str) -> bool {
+        let Some(name) = self.native_state_name(state) else {
+            return false;
+        };
+        let items = self.items();
+        if tag.contains(':') {
+            return items.block_in_tag(tag, name);
+        }
+        let mut full = String::from("minecraft:");
+        full.push_str(tag);
+        items.block_in_tag(&full, name)
+    }
+    /// The eyes and the unit look direction of the player acting now (the
+    /// one `native_use_block` or `native_command` is about), as vanilla
+    /// picks blocks from.
+    pub(super) fn native_look(&self) -> Option<([f64; 3], [f64; 3])> {
+        self.aim()
+    }
+    /// The blocks of resident chunk `chunk` (its x and z) in the states mods
+    /// watch (`native_watch_block`), with their states: what a mod looks for
+    /// when `native_chunk` says a chunk came. Sections with no watched state
+    /// in their palette are passed over unread.
+    pub(super) fn native_watched_blocks(&self, chunk: [i32; 2]) -> Vec<([i32; 3], BlockStateId)> {
+        let mut found = Vec::new();
+        let Some(column) = self.world.chunks.get(&(chunk[0], chunk[1])) else {
+            return found;
+        };
+        let watched = |v: u32| self.native_watched.get(v as usize) == Some(&true);
+        let mut cells = [0u32; 4096];
+        for (s, section) in column.sections.iter().enumerate() {
+            if !section.blocks.maybe_has(watched) {
+                continue;
+            }
+            let y0 = column.min_y() + s as i32 * 16;
+            section.unpack(&mut cells);
+            for (i, v) in cells.iter().enumerate() {
+                if watched(*v) {
+                    let x = chunk[0] * 16 + (i & 15) as i32;
+                    let z = chunk[1] * 16 + ((i >> 4) & 15) as i32;
+                    found.push(([x, y0 + (i >> 8) as i32, z], BlockStateId(*v)));
+                }
+            }
+        }
+        found
     }
     /// Have `native_block_changed` report each write of block `name`'s
     /// states (to them or from them). The number of states, 0 for an
