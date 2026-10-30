@@ -499,6 +499,17 @@ impl Game<'_> {
     pub(super) fn native_commands(&mut self, commands: &mut Vec<String>) {
         let _ = commands;
     }
+    /// The full syntax of the mod's commands, for every player's command
+    /// tree and its suggestions: push (name, the command's node as JSON in
+    /// the commands report's format: a `literal` whose children are
+    /// literals and `argument`s naming their `parser`, such as
+    /// `brigadier:integer` or `minecraft:block_pos`, each maybe
+    /// `executable`). It takes the place of the name's free text from
+    /// `native_commands`; the command still runs through `native_command`.
+    /// Asked each server tick. API 4.
+    pub(super) fn native_command_syntax(&mut self, syntax: &mut Vec<(String, String)>) {
+        let _ = syntax;
+    }
     /// A payload arrived on `channel` (`mod:name`): from player `from` on a
     /// server, from the server (None) on a client (the networking API's
     /// receivers). Answer with `native_send_payload`. API 4.

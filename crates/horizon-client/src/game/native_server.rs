@@ -8,7 +8,10 @@
 //! and macros like them (`native_hooks::tests::server_helpers_stay_hookable`).
 use super::{Dim, Game, native_events};
 use horizon_client::items::ItemStack;
-use horizon_core::{geometry::Vec3, position::BlockPos};
+use horizon_core::{
+    geometry::{Direction, Vec3},
+    position::BlockPos,
+};
 use horizon_world::registry::BlockStateId;
 use std::path::PathBuf;
 
@@ -435,6 +438,56 @@ impl Game<'_> {
     /// leave it to its components (None).
     pub(super) fn native_set_compostable(&self, item: &str, chance: Option<f32>) {
         horizon_client::items::set_mod_compostable(item, chance);
+    }
+    /// The items of the container at `pos` (Fabric's transfer API: chests,
+    /// barrels, furnaces, hoppers, brewing stands... a double chest as one),
+    /// slot by slot; None where no container is.
+    pub(super) fn native_container_items(&self, pos: [i32; 3]) -> Option<Vec<Option<ItemStack>>> {
+        self.container_slots_at((pos[0], pos[1], pos[2]))
+    }
+    /// Put `stack` into the container at `pos` through its side `face` (a
+    /// unit vector: a furnace's top takes what it cooks, its sides fuel), as
+    /// a hopper does. What didn't fit comes back.
+    pub(super) fn native_insert_item(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        stack: ItemStack,
+    ) -> Option<ItemStack> {
+        let Some(face) = Direction::ALL.into_iter().find(|d| d.normal() == face) else {
+            return Some(stack);
+        };
+        self.container_insert_at((pos[0], pos[1], pos[2]), face, stack)
+    }
+    /// Take up to `max` items of one stack out of the container at `pos`
+    /// through its side `face`, as a hopper would.
+    pub(super) fn native_extract_item(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        max: u32,
+    ) -> Option<ItemStack> {
+        let face = Direction::ALL.into_iter().find(|d| d.normal() == face)?;
+        self.container_extract_at((pos[0], pos[1], pos[2]), face, max)
+    }
+    /// The block entities of resident chunk `chunk` with their types
+    /// (`minecraft:furnace`): what Fabric's block entity load event gives,
+    /// asked when `native_chunk` says the chunk came.
+    pub(super) fn native_block_entities(&self, chunk: [i32; 2]) -> Vec<([i32; 3], &'static str)> {
+        let mut found = Vec::new();
+        for (p, _) in self.world.block_entities.iter() {
+            if (p.0 >> 4, p.2 >> 4) != (chunk[0], chunk[1]) || !self.native_loaded([p.0, p.1, p.2])
+            {
+                continue;
+            }
+            let pos = [p.0, p.1, p.2];
+            let name = self.native_state_name(self.native_block(pos));
+            if let Some(kind) = name.and_then(horizon_client::lan::chunks::block_entity_type) {
+                found.push((pos, kind));
+            }
+        }
+        found.sort();
+        found
     }
     /// Answer the command being run (`native_command`), as its source's
     /// feedback: red when `error`. Outside a command it shows only in the

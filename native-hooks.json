@@ -184,6 +184,11 @@
       "name": "allow_chat",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_allow_chat"
+    },
+    {
+      "name": "command_syntax",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_command_syntax"
     }
   ]
 }

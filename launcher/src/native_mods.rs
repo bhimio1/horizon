@@ -136,6 +136,8 @@ pub struct Bundle {
     /// The other native mods it needs, by id, with the versions it takes (its `.hnmod`'s
     /// `depends`): a build without them is refused.
     pub depends: BTreeMap<String, String>,
+    /// The native mods it can't be built with, and their versions (its `.hnmod`'s `breaks`).
+    pub breaks: BTreeMap<String, String>,
 }
 
 /// The bundles in `folder`: the folder itself when it is one (a `horizon-mixin.toml`, or an
@@ -187,18 +189,23 @@ fn bundle_in(dir: &Path) -> Result<Option<Bundle>, String> {
             hooks: native_json["hooks"]
                 .as_u64()
                 .and_then(|v| u32::try_from(v).ok()),
-            depends: native_json["depends"]
-                .as_object()
-                .map(|needs| {
-                    needs
-                        .iter()
-                        .filter_map(|(id, r)| Some((id.clone(), r.as_str()?.to_owned())))
-                        .collect()
-                })
-                .unwrap_or_default(),
+            depends: requirements(&native_json["depends"]),
+            breaks: requirements(&native_json["breaks"]),
             ..found
         })),
     }
+}
+
+/// A `horizon-native.json` map of mod ids to version requirements.
+fn requirements(field: &serde_json::Value) -> BTreeMap<String, String> {
+    field
+        .as_object()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(id, r)| Some((id.clone(), r.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn bundle(dir: &Path, mixins: Option<String>) -> Result<Bundle, String> {
@@ -225,6 +232,7 @@ fn bundle(dir: &Path, mixins: Option<String>) -> Result<Bundle, String> {
         mixins,
         hooks: None,
         depends: BTreeMap::new(),
+        breaks: BTreeMap::new(),
     })
 }
 
@@ -627,10 +635,14 @@ pub fn build(
         })
         .collect();
     // Each mod's needs are among the mods built with it.
-    let unmet = horizon_mods::index::native::unmet_dependencies(
+    let mut unmet = horizon_mods::index::native::unmet_dependencies(
         mods.iter()
             .map(|b| (b.id.as_str(), b.version.as_str(), &b.depends)),
     );
+    unmet.extend(horizon_mods::index::native::broken_pairs(
+        mods.iter()
+            .map(|b| (b.id.as_str(), b.version.as_str(), &b.breaks)),
+    ));
     if !unmet.is_empty() {
         return Err(unmet.join("\n"));
     }
@@ -1064,6 +1076,7 @@ mod tests {
             mixins: None,
             hooks: None,
             depends: BTreeMap::new(),
+            breaks: BTreeMap::new(),
         };
         let never = || -> Result<String, String> { panic!("a pin wins") };
         fn get(b: &Bundle) -> Option<&String> {
@@ -1102,6 +1115,7 @@ mod tests {
             mixins: None,
             hooks,
             depends: BTreeMap::new(),
+            breaks: BTreeMap::new(),
         };
         let c = "c".repeat(40);
         // A (the game) has hook points v1, B v2, C none.

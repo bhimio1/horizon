@@ -60,9 +60,35 @@ fn valid_command(name: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "_-".contains(c))
 }
 
-/// The commands' tree in the commands report's format: each name runs alone
-/// or with any text after it (a greedy string).
-pub(super) fn command_tree(names: &[String]) -> Value {
+/// Whether `node` is a command node in the commands report's format: a
+/// literal, or an argument naming its parser (`brigadier:integer`...), each
+/// maybe `executable`, with children of the same kind.
+fn valid_node(node: &Value, depth: usize) -> bool {
+    let Some(map) = node.as_object() else {
+        return false;
+    };
+    let kind = match map.get("type").and_then(Value::as_str) {
+        Some("literal") => true,
+        Some("argument") => map
+            .get("parser")
+            .and_then(Value::as_str)
+            .is_some_and(|p| p.contains(':')),
+        _ => false,
+    };
+    let children = match map.get("children") {
+        None => true,
+        Some(Value::Object(children)) => children.iter().all(|(name, child)| {
+            !name.is_empty() && !name.contains(char::is_whitespace) && valid_node(child, depth + 1)
+        }),
+        Some(_) => false,
+    };
+    kind && children && depth < 32
+}
+
+/// The tree of the mods' commands in the commands report's format: each
+/// name runs alone or with any text after it (a greedy string), unless its
+/// mod gave its syntax.
+pub(super) fn command_tree(names: &[String], syntax: &[(String, Value)]) -> Value {
     let mut children = Map::new();
     for name in names {
         let mut args = Map::new();
@@ -79,6 +105,9 @@ pub(super) fn command_tree(names: &[String]) -> Value {
         literal.insert("executable".into(), true.into());
         literal.insert("children".into(), Value::Object(args_child));
         children.insert(name.clone(), Value::Object(literal));
+    }
+    for (name, node) in syntax {
+        children.insert(name.clone(), node.clone());
     }
     let mut root = Map::new();
     root.insert("type".into(), "root".into());
@@ -130,8 +159,12 @@ impl Game<'_> {
         names.retain(|n| valid_command(n));
         names.sort();
         names.dedup();
+        let mut written = Vec::new();
+        self.native_command_syntax(&mut written);
+        written.sort();
+        written.dedup_by(|a, b| a.0 == b.0);
         let mut hasher = DefaultHasher::new();
-        names.hash(&mut hasher);
+        (&names, &written).hash(&mut hasher);
         let key = hasher.finish();
         // With no mod commands, the tree stays as it was sent.
         let unchanged = host
@@ -140,7 +173,20 @@ impl Game<'_> {
             .map_or(names.is_empty(), |k| k == key);
         host.hub.hold_chat = self.native_events.filter_chat;
         if !unchanged {
-            host.hub.set_mod_commands(key, command_tree(&names));
+            let mut syntax = Vec::new();
+            for (name, json) in written {
+                let node = serde_json::from_str::<Value>(&json).ok();
+                match node
+                    .filter(|n| valid_command(&name) && n["type"] == "literal" && valid_node(n, 0))
+                {
+                    Some(node) => syntax.push((name, node)),
+                    None => log::warn!(
+                        "a native mod's syntax for /{name} is not a literal command node"
+                    ),
+                }
+            }
+            host.hub
+                .set_mod_commands(key, command_tree(&names, &syntax));
         }
         for (to, channel, data) in std::mem::take(&mut self.native_events.payloads) {
             if let Some(conn) = to {
@@ -265,7 +311,7 @@ mod tests {
 
     #[test]
     fn mod_commands_run_alone_or_with_text() {
-        let tree = command_tree(&["create".into()]);
+        let tree = command_tree(&["create".into()], &[]);
         let create = &tree["children"]["create"];
         assert_eq!(create["type"], "literal");
         assert_eq!(create["executable"], true);
@@ -273,5 +319,22 @@ mod tests {
         assert_eq!(args["parser"], "brigadier:string");
         assert_eq!(args["properties"]["type"], "greedy");
         assert!(valid_command("create") && !valid_command("Create") && !valid_command("a b"));
+    }
+
+    #[test]
+    fn a_mods_syntax_replaces_the_free_text() {
+        let node: Value = serde_json::from_str(
+            r#"{"type": "literal", "children": {"motor": {"type": "literal", "children":
+                {"rpm": {"type": "argument", "parser": "brigadier:integer",
+                         "properties": {"min": -256, "max": 256}, "executable": true}}}}}"#,
+        )
+        .unwrap();
+        assert!(valid_node(&node, 0));
+        let tree = command_tree(&["create".into()], &[("create".into(), node)]);
+        let rpm = &tree["children"]["create"]["children"]["motor"]["children"]["rpm"];
+        assert_eq!(rpm["parser"], "brigadier:integer");
+        assert!(tree["children"]["create"]["children"]["args"].is_null());
+        let bad: Value = serde_json::from_str(r#"{"type": "argument"}"#).unwrap();
+        assert!(!valid_node(&bad, 0));
     }
 }
