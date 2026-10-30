@@ -64,10 +64,15 @@ the window. How each part of Fabric maps to these: [fabric-parity.md](fabric-par
 | `native_block_drops(pos, state, drops)` | a block broken by a player or an explosion drops | `LootTableEvents.MODIFY` (block drops) |
 | `native_player_join`, `native_player_leave` | a player joins, leaves, or the server stops | `ServerPlayConnectionEvents.JOIN/DISCONNECT` |
 | `native_player_hurt(damage_type, amount)` | the player acting is about to take damage; 0 cancels | `ServerLivingEntityEvents.ALLOW_DAMAGE` |
+| `native_mob_hurt(entity, kind, damage_type, amount)` | a mob is about to take damage from an attack, a projectile or `/damage`; 0 cancels | `ServerLivingEntityEvents.ALLOW_DAMAGE` |
+| `native_sleep(head, allow)` | a player is about to lie down, vanilla's checks passed | `EntitySleepEvents.ALLOW_SLEEPING` |
+| `native_player_changed_level(conn, from, to)` | a player went to another level | `ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD` |
+| `native_pick_block(pos, stack)` | what a player picks from a block | pick-block events |
 | `native_player_death`, `native_mob_death` | a player or a mob died | `ServerLivingEntityEvents.AFTER_DEATH` |
 | `native_allow_chat(conn, message, allow)` | a player's chat, before anyone gets it (after `native_filter_chat(true)`) | `ServerMessageEvents.ALLOW_CHAT_MESSAGE` |
 | `native_chat_message(conn, message)` | a player's chat went out | `ServerMessageEvents.CHAT_MESSAGE` |
 | `native_commands(commands)` | each server tick: the mod's command names, for every player's command tree (they run through `native_command`) | `CommandRegistrationCallback` |
+| `native_command_syntax(syntax)` | each server tick: a command's full Brigadier node (the commands report's format), so clients suggest and check its arguments | `CommandRegistrationCallback` (arguments) |
 | `native_payload(from, channel, data)` | a custom payload arrived, on the server or the client | networking API receivers |
 | `native_tooltip(stack, lines)` | an item's tooltip, after its own lines | `ItemTooltipCallback` |
 | `native_creative_items(tab, items)` | a creative tab opens the first time | `ItemGroupEvents.modifyEntriesEvent` |
@@ -84,6 +89,10 @@ The helpers (`crates/horizon-client/src/game/native_server.rs`):
   collision, light, fluid) and tags (`native_block_tagged`).
 - **Entities and items:** `native_entity_type`, `native_entity_position`, dropped items (`native_items_in`,
   `native_update_item`, `native_spawn_item`), `native_max_stack`, cooking recipes (`native_cook`).
+- **Containers** (Fabric's transfer API, item storage): `native_container_items`, `native_insert_item` and
+  `native_extract_item` through a side, with the hopper's rules (double chests, a furnace's faces); a chunk's block
+  entities (`native_block_entities`).
+- **Effects:** `native_play_sound`, `native_particles`, for the players near a position.
 - **Players:** `native_players`, `native_acting_player`, `native_held`, `native_sneaking`, `native_look`, `native_permission`,
   `native_teleport`, and a command's reply (`native_reply`).
 - **Data kept with the world** (Fabric's data attachments, in the world folder's `horizon-native-data.json`):
@@ -93,11 +102,14 @@ The helpers (`crates/horizon-client/src/game/native_server.rs`):
   client. A Horizon server and client drop payloads on channels no mod reads.
 - **Chat:** `native_filter_chat` holds players' chat for `native_allow_chat`.
 - **Content registries**, for every game of the process: `native_set_fuel` (`FuelRegistry`), `native_set_compostable`
-  (`CompostingChanceRegistry`).
+  (`CompostingChanceRegistry`), `native_set_strippable`, `native_set_tillable`, `native_set_flammable`.
+- **Game rules:** `native_register_game_rule` (`mymod:rule`, a bool or an int), which `/gamerule` reads and sets
+  for game masters and every player's command tree suggests, and `native_game_rule`.
 
 A native mod can name the other native mods it needs in its `horizon-native.json`: `"depends": {"other_mod": ">=1.2.0"}`
-(`*` for any version, an exact version, or `>=` one). The launcher refuses to build a set of mods with a need
-missing or a version it doesn't take.
+(`*` for any version, an exact version, or `>=` one), and the ones it can't be built with: `"breaks": {"old_mod":
+"*"}`. The launcher refuses to build a set of mods with a need missing, a version it doesn't take, or a pair that
+breaks.
 
 ## What the launcher does
 
