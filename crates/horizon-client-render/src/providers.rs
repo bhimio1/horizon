@@ -106,6 +106,9 @@ impl Providers {
         }
     }
     pub fn burn_time(&self, items: &Items, stack: &ItemStack, fast: bool) -> i32 {
+        if let Some(ticks) = horizon_items::items::mod_fuel(&stack.item) {
+            return ticks;
+        }
         items
             .get(&stack.item)
             .and_then(|i| i.fuel.as_ref())

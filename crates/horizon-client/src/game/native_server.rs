@@ -6,7 +6,7 @@
 //! place (`native_level`); states are the block registry's ids, the same
 //! for the whole game. Kept as stable as the hook points, and free of `cfg`
 //! and macros like them (`native_hooks::tests::server_helpers_stay_hookable`).
-use super::Game;
+use super::{Dim, Game, native_events};
 use horizon_client::items::ItemStack;
 use horizon_core::{geometry::Vec3, position::BlockPos};
 use horizon_world::registry::BlockStateId;
@@ -255,6 +255,81 @@ impl Game<'_> {
         }
         let state = self.native_block(pos);
         self.native_state_name(state).map(str::to_owned)
+    }
+    /// The type of entity `entity` (its network id) in the level in place
+    /// (`minecraft:pig`), None when there is none. Players aren't found.
+    pub(super) fn native_entity_type(&self, entity: i32) -> Option<String> {
+        let target = self.native_target(entity)?;
+        Some(self.target_type(target))
+    }
+    /// Where entity `entity` is (its feet).
+    pub(super) fn native_entity_position(&self, entity: i32) -> Option<[f64; 3]> {
+        let target = self.native_target(entity)?;
+        self.target_position(target)
+    }
+    /// The player whose action, command or damage runs now on a server:
+    /// their connection, name and uuid.
+    pub(super) fn native_acting_player(&self) -> Option<(u32, String, u128)> {
+        let conn = self.lan_acting?;
+        let name = self.lan_acting_name.clone()?;
+        Some((conn, name, self.lan_acting_uuid?))
+    }
+    /// The players on the server (`native_player_join` to
+    /// `native_player_leave`): connection, name and uuid.
+    pub(super) fn native_players(&self) -> Vec<(u32, String, u128)> {
+        let players = self.native_events.players.iter();
+        players.map(|(c, (n, u))| (*c, n.clone(), *u)).collect()
+    }
+    /// The permission level (0 to 4) of the command running now: mod
+    /// commands get no check of their own.
+    pub(super) fn native_permission(&self) -> u8 {
+        self.ui.registries.permission
+    }
+    /// Send `data` on `channel` (`mod:name`) to player `to` (on a server)
+    /// or to the server (None, on a client), at the end of the tick. False
+    /// for a bad channel or one too big (32767 bytes to a server, 1 MiB to
+    /// a player). Unknown channels are dropped on the other side.
+    pub(super) fn native_send_payload(
+        &mut self,
+        to: Option<u32>,
+        channel: &str,
+        data: &[u8],
+    ) -> bool {
+        let max = match to {
+            Some(_) => native_events::MAX_TO_CLIENT,
+            None => native_events::MAX_TO_SERVER,
+        };
+        if !native_events::valid_channel(channel) || data.len() > max {
+            return false;
+        }
+        let payload = (to, channel.to_owned(), data.to_vec());
+        self.native_events.payloads.push(payload);
+        true
+    }
+    /// Move player `conn` to `pos` in `level` (`minecraft:the_end`) at the
+    /// end of the tick. False for an unknown level.
+    pub(super) fn native_teleport(&mut self, conn: u32, level: &str, pos: [f64; 3]) -> bool {
+        let dim = Dim::from_id(level);
+        if dim.id() != level || pos.iter().any(|v| !v.is_finite()) {
+            return false;
+        }
+        self.native_events.teleports.push((conn, dim, pos));
+        true
+    }
+    /// Hold players' chat for `native_allow_chat` (on), or send it at once
+    /// as vanilla does (off, the default).
+    pub(super) fn native_filter_chat(&mut self, on: bool) {
+        self.native_events.filter_chat = on;
+    }
+    /// Make `item` a furnace fuel burning `ticks` (FuelRegistry), or leave
+    /// it to its components (None). For every game of the process.
+    pub(super) fn native_set_fuel(&self, item: &str, ticks: Option<i32>) {
+        horizon_client::items::set_mod_fuel(item, ticks);
+    }
+    /// Make `item` compostable with `chance` (CompostingChanceRegistry), or
+    /// leave it to its components (None).
+    pub(super) fn native_set_compostable(&self, item: &str, chance: Option<f32>) {
+        horizon_client::items::set_mod_compostable(item, chance);
     }
     /// Answer the command being run (`native_command`), as its source's
     /// feedback: red when `error`. Outside a command it shows only in the

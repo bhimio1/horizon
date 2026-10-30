@@ -89,6 +89,101 @@
       "name": "save",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_save"
+    },
+    {
+      "name": "attack_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_block"
+    },
+    {
+      "name": "before_break",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_before_break"
+    },
+    {
+      "name": "after_break",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_after_break"
+    },
+    {
+      "name": "block_drops",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_drops"
+    },
+    {
+      "name": "use_item",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_item"
+    },
+    {
+      "name": "use_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_entity"
+    },
+    {
+      "name": "attack_entity",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_attack_entity"
+    },
+    {
+      "name": "player_join",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_join"
+    },
+    {
+      "name": "player_leave",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_leave"
+    },
+    {
+      "name": "player_death",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_death"
+    },
+    {
+      "name": "player_hurt",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_hurt"
+    },
+    {
+      "name": "mob_death",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_death"
+    },
+    {
+      "name": "level_loaded",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_loaded"
+    },
+    {
+      "name": "chat_message",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_chat_message"
+    },
+    {
+      "name": "commands",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_commands"
+    },
+    {
+      "name": "payload",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_payload"
+    },
+    {
+      "name": "tooltip",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_tooltip"
+    },
+    {
+      "name": "creative_items",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_creative_items"
+    },
+    {
+      "name": "allow_chat",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_allow_chat"
     }
   ]
 }

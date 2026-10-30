@@ -157,6 +157,10 @@ pub enum HostEvent {
         sender: u128,
         text: String,
     },
+    /// A player's chat message held back for server mods to allow
+    /// ([`Hub::hold_chat`]): it goes out with [`Hub::send_held_chat`], or not
+    /// at all.
+    HeldChat(Box<chat::HeldChat>),
     /// A server log warning (ServerGamePacketListenerImpl's LOGGER.warn).
     Warn(String),
     /// A server log error (LOGGER.error).
@@ -219,6 +223,9 @@ pub struct Hub {
     /// Server mods' commands, a root in the commands report's format, sent
     /// after vanilla's; the key the game last set them for.
     mod_commands: (serde_json::Value, Option<u64>),
+    /// Hold players' chat messages for server mods to allow
+    /// ([`HostEvent::HeldChat`]) instead of sending them at once.
+    pub hold_chat: bool,
 }
 
 fn string(s: &str) -> Tag {
@@ -390,6 +397,7 @@ impl Hub {
             entities: Default::default(),
             entity_out: Vec::new(),
             mod_commands: (serde_json::Value::Null, None),
+            hold_chat: false,
             teams: Vec::new(),
         }
     }

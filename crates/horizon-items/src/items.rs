@@ -6,12 +6,48 @@ use horizon_core::random::RandomSource;
 use horizon_world::loot::PackOverlay;
 use horizon_world::registry::{BlockRegistry, BlockStateId};
 use serde_json::Value;
+use std::sync::RwLock;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::Path,
     sync::Arc,
 };
+
+/// Fuels native mods add (Fabric's `FuelRegistry`): burn ticks by item, for
+/// every game of the process, before the item's own `cooking_fuel`.
+static MOD_FUELS: RwLock<BTreeMap<String, i32>> = RwLock::new(BTreeMap::new());
+/// Compostables native mods add (`CompostingChanceRegistry`): the chance
+/// one item adds a layer.
+static MOD_COMPOSTABLES: RwLock<BTreeMap<String, f32>> = RwLock::new(BTreeMap::new());
+
+/// Make `item` a fuel burning `ticks`, or (None) leave it to its components.
+pub fn set_mod_fuel(item: &str, ticks: Option<i32>) {
+    let mut fuels = MOD_FUELS.write().unwrap_or_else(|e| e.into_inner());
+    match ticks {
+        Some(t) => fuels.insert(item.to_owned(), t),
+        None => fuels.remove(item),
+    };
+}
+/// The burn ticks a native mod gave `item`.
+pub fn mod_fuel(item: &str) -> Option<i32> {
+    let fuels = MOD_FUELS.read().unwrap_or_else(|e| e.into_inner());
+    fuels.get(item).copied()
+}
+/// Make `item` compostable with `chance` (0 to 1), or (None) leave it to
+/// its components.
+pub fn set_mod_compostable(item: &str, chance: Option<f32>) {
+    let mut compostables = MOD_COMPOSTABLES.write().unwrap_or_else(|e| e.into_inner());
+    match chance {
+        Some(c) => compostables.insert(item.to_owned(), c.clamp(0.0, 1.0)),
+        None => compostables.remove(item),
+    };
+}
+/// The composting chance a native mod gave `item`.
+pub fn mod_compostable(item: &str) -> Option<f32> {
+    let compostables = MOD_COMPOSTABLES.read().unwrap_or_else(|e| e.into_inner());
+    compostables.get(item).copied()
+}
 
 /// A fire starter's use sound: `SoundEvents.FIRECHARGE_USE` or
 /// `FLINTANDSTEEL_USE`.

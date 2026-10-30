@@ -157,6 +157,7 @@ mod moving_pistons;
 mod music;
 mod names;
 mod native_data;
+mod native_events;
 mod native_hooks;
 mod native_lifecycle;
 mod native_panel;
@@ -1983,6 +1984,9 @@ struct Game<'a> {
     native_watched: Vec<bool>,
     /// What native mods keep with the world (`native_world_data`).
     native_data: native_data::NativeData,
+    /// What native mods asked of the network, and what they added to the
+    /// creative tabs.
+    native_events: native_events::NativeEvents,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -4327,6 +4331,13 @@ impl Game<'_> {
         {
             return Ok(());
         }
+        let mut cancel = false;
+        let before = self.world.block(pos[0], pos[1], pos[2]);
+        self.native_before_break(pos, before, &mut cancel);
+        if cancel {
+            // The client's acknowledgement puts its predicted air back.
+            return Ok(());
+        }
         self.pad_rumble(horizon_client::gamepad::Rumble::BlockBroken);
         // ServerPlayerGameMode.destroyBlock.
         let state = self.world.block(pos[0], pos[1], pos[2]);
@@ -4400,7 +4411,8 @@ impl Game<'_> {
                 if let Some(p) = self.player.as_mut() {
                     p.cause_food_exhaustion(0.005);
                 }
-                let drops = self.block_loot_at(pos, state, held.as_ref());
+                let mut drops = self.block_loot_at(pos, state, held.as_ref());
+                self.native_block_drops(pos, broken, &mut drops);
                 let silk = held
                     .as_ref()
                     .is_some_and(|h| h.enchantment_level("minecraft:silk_touch") > 0);
@@ -4467,6 +4479,9 @@ impl Game<'_> {
         }
         self.pending.clear(pos);
         self.process_level_events()?;
+        if removed {
+            self.native_after_break(pos, broken);
+        }
         Ok(())
     }
     /// The hand whose use ended the click, if any.
@@ -4531,6 +4546,14 @@ impl Game<'_> {
     /// `Player.interactOn` for the entity under the crosshair with the
     /// acting hand: whether it took the click.
     fn interact_entity(&mut self) -> Result<bool> {
+        if let Some(Some(entity)) = self.pick_entity_hit() {
+            let mut result = native_server::NativeUse::Pass;
+            let main_hand = self.hand == Hand::Main;
+            self.native_use_entity(entity, main_hand, &mut result);
+            if self.native_use_ends(result) {
+                return Ok(true);
+            }
+        }
         Ok(self.interact_frame()
             || self.interact_armor_stand()
             || self.interact_cushion()
@@ -4566,20 +4589,14 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
-        if let Some(hit) = block_hit {
-            let mut result = native_server::NativeUse::Pass;
-            let main_hand = self.hand == Hand::Main;
-            self.native_use_block(hit.pos, hit.face, main_hand, &mut result);
-            match result {
-                native_server::NativeUse::Pass => {}
-                native_server::NativeUse::Success => {
-                    self.swing_arm();
-                    return Ok(true);
-                }
-                native_server::NativeUse::Consume | native_server::NativeUse::Fail => {
-                    return Ok(true);
-                }
-            }
+        let mut result = native_server::NativeUse::Pass;
+        let main_hand = self.hand == Hand::Main;
+        match block_hit {
+            Some(hit) => self.native_use_block(hit.pos, hit.face, main_hand, &mut result),
+            None => self.native_use_item(main_hand, &mut result),
+        }
+        if self.native_use_ends(result) {
+            return Ok(true);
         }
         // MultiPlayerGameMode.useItemOn: blocks react first.
         if !(sneaking && hands_full)
@@ -12917,6 +12934,7 @@ impl Game<'_> {
                         }
                         if self.creative {
                             self.screen = Screen::Creative;
+                            self.native_fill_creative();
                             self.creative_screen.reopen();
                             self.refresh_saved_hotbars();
                         } else {
@@ -14793,6 +14811,7 @@ impl<'a> Game<'a> {
             native_lifecycle: Default::default(),
             native_watched: Vec::new(),
             native_data: Default::default(),
+            native_events: Default::default(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

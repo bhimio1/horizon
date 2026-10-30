@@ -1500,6 +1500,7 @@ impl Game<'_> {
         // The close request starts before player and world saves.
         self.native_lifecycle.begin_close();
         log("INFO", "Stopping server");
+        self.native_server_stopping();
         log("INFO", "Saving players");
         if let Some(h) = self.lan.as_mut() {
             for g in &h.hub.guests {
@@ -1525,6 +1526,7 @@ impl Game<'_> {
         // ServerPlayer.disconnect: nobody is left in a bed.
         self.free_player_beds()?;
         self.save_game()?;
+        self.native_levels_closed();
         self.log_saved_levels();
         // Only a successful final save closes the epoch; storage is still held.
         self.native_lifecycle_world_closed();

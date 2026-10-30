@@ -1119,6 +1119,15 @@ impl Game<'_> {
                         return;
                     }
                     let face = direction(i32::from(a.direction));
+                    // AttackBlockCallback: a mod may take the click (the ack
+                    // puts the client's block back).
+                    let mut attack = super::native_server::NativeUse::Pass;
+                    self.as_guest(host, conn, |g| {
+                        g.native_attack_block(a.pos, face, &mut attack);
+                    });
+                    if attack != super::native_server::NativeUse::Pass {
+                        return;
+                    }
                     let play = host.play.entry(conn).or_default();
                     play.digging = Some((a.pos, face));
                     play.dig_start = host.hub.ticks;
@@ -1485,6 +1494,7 @@ impl Game<'_> {
             S::CustomPayload(p) if p.channel == horizon_protocol::quiet::CHANNEL => {
                 self.guest_quiet_commands(host, conn, &p.data)
             }
+            S::CustomPayload(p) => self.native_payload(Some(conn), &p.channel, &p.data),
             S::ChatCommandSigned(p) => self.guest_signed_command(host, conn, p),
             S::ChangeDifficulty(p) if host.hub.guests[gi].permission >= 2 => {
                 if !self.level.difficulty_locked && (0..=3).contains(&p.difficulty) {
@@ -1870,6 +1880,11 @@ impl Game<'_> {
             return;
         };
         if host.hub.guests[gi].spectator() {
+            return;
+        }
+        let mut cancel = false;
+        self.as_guest(host, conn, |g| g.native_attack_entity(id, &mut cancel));
+        if cancel {
             return;
         }
         if let Some(victim) = Self::pvp_victim(host, conn, id) {
@@ -2490,6 +2505,9 @@ impl Game<'_> {
                 self.as_guest(host, conn, |game| game.drop_inventory(eyes));
             }
             self.spawn_orbs(at, reward);
+            let g = &host.hub.guests[gi];
+            let (name, uuid) = (g.name.clone(), g.uuid);
+            self.native_player_death(conn, &name, uuid);
         }
     }
 

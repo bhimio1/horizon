@@ -282,7 +282,8 @@ impl Containers<'_> {
                 let fuel = self
                     .items
                     .get(&stack.item)
-                    .is_some_and(|i| i.fuel.is_some());
+                    .is_some_and(|i| i.fuel.is_some())
+                    || horizon_client::items::mod_fuel(&stack.item).is_some();
                 let current_bucket = self
                     .get(view, 1)
                     .is_some_and(|s| &*s.item == "minecraft:bucket");

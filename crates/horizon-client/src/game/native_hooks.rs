@@ -6,10 +6,12 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
-//! API 4 adds server events (`native_level_tick`, `native_use_block`,
-//! `native_block_changed`, `native_chunk`) and the world helpers of
-//! `native_server.rs`: what Fabric API's tick, interaction and chunk events
-//! give a mod (docs/fabric-parity.md).
+//! API 4 adds what Fabric API gives a mod (docs/fabric-parity.md): server
+//! events (level ticks, levels and chunks, saves, players joining, leaving,
+//! hurt and dying, mobs dying, chat), interaction events (using and
+//! attacking blocks, items and entities, breaking blocks and their drops),
+//! command trees, custom payloads, tooltips and creative tabs; and the
+//! helpers of `native_server.rs`, data kept with the world included.
 //!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
@@ -29,6 +31,7 @@
 use super::native_lifecycle::{NativeLifecycleContext, WorldPhase};
 use super::native_server::NativeUse;
 use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
+use horizon_client::items::ItemStack;
 use horizon_client::{
     chat::ChatSource,
     extras::Corner,
@@ -384,6 +387,135 @@ impl Game<'_> {
     /// close): write what the mod keeps, with `native_set_world_data` or
     /// in `native_world_dir`. Where `native_level_tick` fires. API 4.
     pub(super) fn native_save(&mut self) {}
+    /// A player starts hitting block `pos` on its face `face`, before it
+    /// is dug (AttackBlockCallback): set `result` to anything but `Pass`
+    /// and the dig doesn't start (the player's block comes back). On the
+    /// server; the player acting is `native_acting_player`. API 4.
+    pub(super) fn native_attack_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        result: &mut NativeUse,
+    ) {
+        let _ = (pos, face, result);
+    }
+    /// A player is about to break block `pos`, which is `state`, mined or
+    /// in creative (PlayerBlockBreakEvents.BEFORE): set `cancel` to keep
+    /// it. API 4.
+    pub(super) fn native_before_break(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        cancel: &mut bool,
+    ) {
+        let _ = (pos, state, cancel);
+    }
+    /// A player broke block `pos`, which was `state`
+    /// (PlayerBlockBreakEvents.AFTER). API 4.
+    pub(super) fn native_after_break(&mut self, pos: [i32; 3], state: BlockStateId) {
+        let _ = (pos, state);
+    }
+    /// What block `pos` (`state`) drops, broken by a player or an
+    /// explosion, before it spawns: add, change or remove stacks (the
+    /// block loot tables' modify event). API 4.
+    pub(super) fn native_block_drops(
+        &mut self,
+        pos: [i32; 3],
+        state: BlockStateId,
+        drops: &mut Vec<ItemStack>,
+    ) {
+        let _ = (pos, state, drops);
+    }
+    /// A player uses the item in a hand (`native_held`) on no block
+    /// (UseItemCallback), before the item reacts; set `result` while it
+    /// is `Pass`. API 4.
+    pub(super) fn native_use_item(&mut self, main_hand: bool, result: &mut NativeUse) {
+        let _ = (main_hand, result);
+    }
+    /// A player uses entity `entity` (its network id: `native_entity_type`)
+    /// with a hand (UseEntityCallback), before it reacts; set `result`
+    /// while it is `Pass`. API 4.
+    pub(super) fn native_use_entity(
+        &mut self,
+        entity: i32,
+        main_hand: bool,
+        result: &mut NativeUse,
+    ) {
+        let _ = (entity, main_hand, result);
+    }
+    /// A player attacks entity `entity` (AttackEntityCallback): set
+    /// `cancel` and the attack does nothing. On the server. API 4.
+    pub(super) fn native_attack_entity(&mut self, entity: i32, cancel: &mut bool) {
+        let _ = (entity, cancel);
+    }
+    /// Player `name` (`uuid`, connection `conn`) joined the server and
+    /// stands in the world (ServerPlayConnectionEvents.JOIN). API 4.
+    pub(super) fn native_player_join(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// Player `name` left the server, the server's stop included
+    /// (ServerPlayConnectionEvents.DISCONNECT). API 4.
+    pub(super) fn native_player_leave(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// Player `name` died (ServerLivingEntityEvents.AFTER_DEATH), after
+    /// their drops. API 4.
+    pub(super) fn native_player_death(&mut self, conn: u32, name: &str, uuid: u128) {
+        let _ = (conn, name, uuid);
+    }
+    /// The player acting is about to take `amount` of `damage_type`
+    /// (`minecraft:fall`...) (ServerLivingEntityEvents.ALLOW_DAMAGE):
+    /// change `amount`, or set it to 0 to cancel the hurt. API 4.
+    pub(super) fn native_player_hurt(&mut self, damage_type: &str, amount: &mut f32) {
+        let _ = (damage_type, amount);
+    }
+    /// Mob `entity` of type `kind` (`minecraft:zombie`) died of
+    /// `damage_type` ("" when unknown) (AFTER_DEATH). API 4.
+    pub(super) fn native_mob_death(&mut self, entity: i32, kind: &str, damage_type: &str) {
+        let _ = (entity, kind, damage_type);
+    }
+    /// Level `level` (`minecraft:the_nether`) was opened (`loaded`) or
+    /// closed (ServerWorldEvents.LOAD/UNLOAD): the first level just before
+    /// `WorldOpenReady`, the others when a player first goes there; all of
+    /// them after the final save. API 4.
+    pub(super) fn native_level_loaded(&mut self, level: &str, loaded: bool) {
+        let _ = (level, loaded);
+    }
+    /// Player `conn` is about to say `message` in chat
+    /// (ServerMessageEvents.ALLOW_CHAT_MESSAGE): clear `allow` and nobody
+    /// gets it. Only while a mod asked with `native_filter_chat`. API 4.
+    pub(super) fn native_allow_chat(&mut self, conn: u32, message: &str, allow: &mut bool) {
+        let _ = (conn, message, allow);
+    }
+    /// Player `conn` said `message` in chat, sent to everyone
+    /// (ServerMessageEvents.CHAT_MESSAGE). API 4.
+    pub(super) fn native_chat_message(&mut self, conn: u32, message: &str) {
+        let _ = (conn, message);
+    }
+    /// The mod's commands, for every player's command tree: push each
+    /// command's name (`create`); it takes any text after it. Asked each
+    /// server tick; the commands run through `native_command`
+    /// (CommandRegistrationCallback). API 4.
+    pub(super) fn native_commands(&mut self, commands: &mut Vec<String>) {
+        let _ = commands;
+    }
+    /// A payload arrived on `channel` (`mod:name`): from player `from` on a
+    /// server, from the server (None) on a client (the networking API's
+    /// receivers). Answer with `native_send_payload`. API 4.
+    pub(super) fn native_payload(&mut self, from: Option<u32>, channel: &str, data: &[u8]) {
+        let _ = (from, channel, data);
+    }
+    /// The tooltip of `stack`: push lines (text, colour) after the item's
+    /// own (ItemTooltipCallback). In the window. API 4.
+    pub(super) fn native_tooltip(&self, stack: &ItemStack, lines: &mut Vec<(Text, u32)>) {
+        let _ = (stack, lines);
+    }
+    /// The creative tab `tab` (`minecraft:building_blocks`) opens for the
+    /// first time: push the items to add after its own
+    /// (ItemGroupEvents.modifyEntriesEvent). In the window. API 4.
+    pub(super) fn native_creative_items(&mut self, tab: &str, items: &mut Vec<ItemStack>) {
+        let _ = (tab, items);
+    }
 }
 
 /// Helpers for native mods, kept as stable as the hook points.
@@ -768,6 +900,42 @@ mod tests {
             "self.native_block_changed(",
         ] {
             assert!(sync.contains(call), "missing: {call}");
+        }
+    }
+
+    /// Every hook point has a call site in the game: a hook that is never
+    /// called is a promise the game doesn't keep.
+    #[test]
+    fn every_hook_point_is_called() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut source = std::fs::read_to_string(dir.join("game.rs")).unwrap();
+        for entry in std::fs::read_dir(dir.join("game")).unwrap() {
+            let path = entry.unwrap().path();
+            let hooks = path.ends_with("native_hooks.rs");
+            if path.extension().is_some_and(|e| e == "rs") && !hooks {
+                source += &std::fs::read_to_string(&path).unwrap();
+            }
+        }
+        let own = include_str!("native_hooks.rs");
+        // native_hooks.rs calls a few itself (`client_mod_command`...).
+        let own_calls = own.split("/// Helpers for native mods").nth(1).unwrap();
+        let section = own
+            .split("/// The hook points. Each does nothing in Horizon.")
+            .nth(1)
+            .unwrap()
+            .split("/// Helpers for native mods")
+            .next()
+            .unwrap();
+        for line in section.lines() {
+            let Some(name) = line.trim().strip_prefix("pub(super) fn native_") else {
+                continue;
+            };
+            let name = name.split('(').next().unwrap();
+            let call = format!(".native_{name}(");
+            assert!(
+                source.contains(&call) || own_calls.contains(&call),
+                "native_{name} is never called"
+            );
         }
     }
 

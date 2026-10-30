@@ -2189,6 +2189,8 @@ impl Game<'_> {
                 ));
             }
         }
+        // ItemTooltipCallback: a mod's lines after the item's own.
+        self.native_tooltip(stack, &mut lines);
         lines
     }
     /// Menu state for the control socket.

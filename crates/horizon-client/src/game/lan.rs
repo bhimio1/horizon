@@ -1652,19 +1652,35 @@ impl Game<'_> {
                     event @ (HostEvent::Chat { .. } | HostEvent::Warn(_) | HostEvent::Error(_)) => {
                         self.lan_log_event(event);
                     }
-                    HostEvent::PlayerChat { sender, .. } => {
-                        if let Some(conn) = host
-                            .hub
-                            .guests
-                            .iter()
-                            .find(|g| g.uuid == sender)
-                            .map(|g| g.conn)
-                        {
-                            self.detect_rate_spam(&mut host, conn, false);
+                    HostEvent::HeldChat(held) => {
+                        // ServerMessageEvents.ALLOW_CHAT_MESSAGE.
+                        let sender = host.hub.guests.iter().find(|g| g.uuid == held.sender);
+                        let mut allow = true;
+                        if let Some(conn) = sender.map(|g| g.conn) {
+                            self.native_allow_chat(conn, &held.message.content, &mut allow);
                         }
+                        if allow {
+                            let mut sent = Vec::new();
+                            host.hub.send_held_chat(*held, &mut sent);
+                            for event in sent {
+                                match event {
+                                    HostEvent::PlayerChat { sender, text } => {
+                                        self.native_chat_sent(&mut host, sender, &text);
+                                    }
+                                    other => self.lan_log_event(other),
+                                }
+                            }
+                        }
+                    }
+                    HostEvent::PlayerChat { sender, text } => {
+                        self.native_chat_sent(&mut host, sender, &text);
                     }
                     HostEvent::Joined(conn) => {
                         self.lan_guest_joined(&mut host, conn, state.as_ref(), entities, spawn);
+                        if let Some(g) = host.hub.guest(conn).filter(|g| g.placed) {
+                            let (name, uuid) = (g.name.clone(), g.uuid);
+                            self.native_joined(conn, &name, uuid);
+                        }
                         if self.options.dedicated.is_some()
                             && let Some(g) = host.hub.guest(conn)
                         {
@@ -1717,6 +1733,7 @@ impl Game<'_> {
                         self.lan_crafting_left(&mut host, &mut guest);
                         if guest.placed {
                             host.award_leave_game(guest.conn);
+                            self.native_left(guest.conn, &guest.name, guest.uuid);
                         }
                         self.save_guest(&host, &guest);
                         host.models.remove(&guest.conn);
@@ -1772,6 +1789,7 @@ impl Game<'_> {
         self.lan_update_waypoints(&mut host, state.as_ref());
         self.lan_sync_scoreboard(&mut host);
         self.lan_sync_border(&mut host);
+        self.native_lan_tick(&mut host);
         drop(holding);
         lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         self.lan = Some(host);

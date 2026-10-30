@@ -826,6 +826,12 @@ impl Game<'_> {
     }
     /// LivingEntity.die / dropAllDeathLoot.
     fn mob_died(&mut self, m: &Mob) {
+        // ServerLivingEntityEvents.AFTER_DEATH.
+        let kind = horizon_client::command::args::normalize(&m.kind.id);
+        let cause = m.last_damage.as_ref().map_or("", |(d, _)| {
+            damage_type(d.kind, matches!(d.attacker, Some(Who::Player)))
+        });
+        self.native_mob_death(m.id as i32, &kind, cause);
         // LivingEntity.die: a sleeper gets up, and its bed is free again.
         if let Some(bed) = horizon_client::mobs::villager::sleeping_pos(m) {
             self.wake_villager(m.id);
@@ -2349,6 +2355,12 @@ impl Game<'_> {
         if self.creative || self.combat.refuse_player_hit {
             return false;
         }
+        // ServerLivingEntityEvents.ALLOW_DAMAGE: a mod may change or cancel it.
+        let mut amount = amount;
+        self.native_player_hurt(damage_type, &mut amount);
+        if amount <= 0.0 {
+            return false;
+        }
         let projectile = self
             .res
             .stations()
@@ -2502,6 +2514,11 @@ impl Game<'_> {
     }
     pub(super) fn hurt_player_by(&mut self, damage_type: &str, amount: f32) {
         if self.creative {
+            return;
+        }
+        let mut amount = amount;
+        self.native_player_hurt(damage_type, &mut amount);
+        if amount <= 0.0 {
             return;
         }
         if let Some(player) = self.player.as_mut()

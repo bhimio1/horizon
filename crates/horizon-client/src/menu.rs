@@ -1220,6 +1220,7 @@ impl Menu {
 
     fn is_fuel(env: &Env, stack: &ItemStack) -> bool {
         env.items.get(&stack.item).is_some_and(|i| i.fuel.is_some())
+            || crate::items::mod_fuel(&stack.item).is_some()
     }
 
     // ---- Slot ----
