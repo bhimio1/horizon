@@ -1069,6 +1069,10 @@ impl Game<'_> {
     }
     /// Melee or ranged damage to another mob; whether the hit landed.
     fn mob_hits_mob(&mut self, target: u32, amount: f32, source: Damage) -> bool {
+        let amount = self.native_mob_damage(target, &source, amount);
+        if amount <= 0.0 {
+            return false;
+        }
         let mut killed = false;
         let mut hurt = false;
         let mut infested = false;
@@ -3231,11 +3235,15 @@ impl Game<'_> {
                         [p.previous.x, p.previous.y, p.previous.z],
                         "minecraft:trident",
                     ),
-                    Who::Mob(id) => self
-                        .mobs
-                        .iter_mut()
-                        .find(|m| m.id == id)
-                        .is_some_and(|m| m.damage(amount, source)),
+                    Who::Mob(id) => {
+                        let amount = self.native_mob_damage(id, &source, amount);
+                        amount > 0.0
+                            && self
+                                .mobs
+                                .iter_mut()
+                                .find(|m| m.id == id)
+                                .is_some_and(|m| m.damage(amount, source))
+                    }
                 };
                 let outcome = if hurt {
                     EntityHit::Hurt
@@ -3271,11 +3279,13 @@ impl Game<'_> {
                         hurt
                     }
                     Who::Mob(id) => {
-                        let hurt = self
-                            .mobs
-                            .iter_mut()
-                            .find(|m| m.id == id)
-                            .is_some_and(|m| m.damage(amount, source));
+                        let amount = self.native_mob_damage(id, &source, amount);
+                        let hurt = amount > 0.0
+                            && self
+                                .mobs
+                                .iter_mut()
+                                .find(|m| m.id == id)
+                                .is_some_and(|m| m.damage(amount, source));
                         dodged = !hurt
                             && self.mobs.iter().find(|m| m.id == id).is_some_and(|m| {
                                 m.species() == Species::Enderman

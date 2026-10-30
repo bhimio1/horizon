@@ -202,10 +202,13 @@ impl Game<'_> {
                     attacker,
                     from,
                 };
-                self.mobs
-                    .iter_mut()
-                    .find(|m| m.id == id)
-                    .is_some_and(|m| m.damage(amount, damage))
+                let amount = self.native_mob_damage(id, &damage, amount);
+                amount > 0.0
+                    && self
+                        .mobs
+                        .iter_mut()
+                        .find(|m| m.id == id)
+                        .is_some_and(|m| m.damage(amount, damage))
             }
             _ => false,
         };

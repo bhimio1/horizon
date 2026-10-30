@@ -7,6 +7,7 @@ use super::lan::LanHost;
 use super::native_server::NativeUse;
 use super::server_travel::LevelTeleport;
 use super::{Dim, Game};
+use horizon_client::mobs::{Damage, Who};
 use horizon_protocol::packets::{
     configuration::CustomPayload,
     play::{Clientbound as C, Serverbound as S},
@@ -148,6 +149,24 @@ impl Game<'_> {
         ]
         .into_iter()
         .find(|t| self.target_position(*t).is_some())
+    }
+
+    /// ServerLivingEntityEvents.ALLOW_DAMAGE for mob `id`: the `amount` of
+    /// `source` the mods leave (0 or less: no hurt).
+    pub(super) fn native_mob_damage(&mut self, id: u32, source: &Damage, amount: f32) -> f32 {
+        let Some(kind) = self
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| horizon_client::command::args::normalize(&m.kind.id))
+        else {
+            return amount;
+        };
+        let player = matches!(source.attacker, Some(Who::Player));
+        let damage_type = super::creatures::damage_type(source.kind, player);
+        let mut amount = amount;
+        self.native_mob_hurt(id as i32, &kind, damage_type, &mut amount);
+        amount
     }
 
     /// The end of the server's network tick: the mods' commands into every

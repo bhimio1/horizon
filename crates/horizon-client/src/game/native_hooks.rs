@@ -458,6 +458,23 @@ impl Game<'_> {
     pub(super) fn native_player_leave(&mut self, conn: u32, name: &str, uuid: u128) {
         let _ = (conn, name, uuid);
     }
+    /// The player acting is about to lie down in the bed whose head is at
+    /// `head`, vanilla's checks passed (EntitySleepEvents.ALLOW_SLEEPING):
+    /// clear `allow` to keep them up (say why with `native_reply`). API 4.
+    pub(super) fn native_sleep(&mut self, head: [i32; 3], allow: &mut bool) {
+        let _ = (head, allow);
+    }
+    /// Player `conn` went from level `from` to level `to`
+    /// (`minecraft:the_nether`), through a portal or a teleport
+    /// (ServerEntityWorldChangeEvents.AFTER_PLAYER_CHANGE_WORLD). API 4.
+    pub(super) fn native_player_changed_level(&mut self, conn: u32, from: &str, to: &str) {
+        let _ = (conn, from, to);
+    }
+    /// What a player picks from block `pos` (the pick-block key): change
+    /// `stack`, or set it to None to pick nothing. API 4.
+    pub(super) fn native_pick_block(&mut self, pos: [i32; 3], stack: &mut Option<ItemStack>) {
+        let _ = (pos, stack);
+    }
     /// Player `name` died (ServerLivingEntityEvents.AFTER_DEATH), after
     /// their drops. API 4.
     pub(super) fn native_player_death(&mut self, conn: u32, name: &str, uuid: u128) {
@@ -468,6 +485,20 @@ impl Game<'_> {
     /// change `amount`, or set it to 0 to cancel the hurt. API 4.
     pub(super) fn native_player_hurt(&mut self, damage_type: &str, amount: &mut f32) {
         let _ = (damage_type, amount);
+    }
+    /// Mob `entity` of type `kind` (`minecraft:zombie`) is about to take
+    /// `amount` of `damage_type` from a player's or a mob's attack, a
+    /// projectile or `/damage` (ServerLivingEntityEvents.ALLOW_DAMAGE): change
+    /// `amount`, or set it to 0 to cancel the hurt. Fire, drowning, falls and
+    /// other harm the mob takes on its own tick don't come here. API 4.
+    pub(super) fn native_mob_hurt(
+        &mut self,
+        entity: i32,
+        kind: &str,
+        damage_type: &str,
+        amount: &mut f32,
+    ) {
+        let _ = (entity, kind, damage_type, amount);
     }
     /// Mob `entity` of type `kind` (`minecraft:zombie`) died of
     /// `damage_type` ("" when unknown) (AFTER_DEATH). API 4.

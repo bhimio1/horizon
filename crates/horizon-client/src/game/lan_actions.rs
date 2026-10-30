@@ -1633,7 +1633,9 @@ impl Game<'_> {
                     if d2 >= range * range {
                         return None;
                     }
-                    g.picked_stack(p.pos, g.creative && p.include_data)
+                    let mut picked = g.picked_stack(p.pos, g.creative && p.include_data);
+                    g.native_pick_block(p.pos, &mut picked);
+                    picked
                 });
             }
             // handlePickItemFromEntity.

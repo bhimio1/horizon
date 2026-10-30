@@ -156,6 +156,10 @@ impl Game<'_> {
     /// `LivingEntity.hurtServer` of the mob at `index` by the player's hit:
     /// the weapon's `armor_effectiveness` enchantments (Breach) thin its armor.
     pub(super) fn hurt_by_player(&mut self, index: usize, amount: f32, source: Damage) -> bool {
+        let amount = self.native_mob_damage(self.mobs[index].id, &source, amount);
+        if amount <= 0.0 {
+            return false;
+        }
         let held = self.held().cloned();
         let kind = self.mobs[index].kind.id.clone();
         let ctx = EffectContext {

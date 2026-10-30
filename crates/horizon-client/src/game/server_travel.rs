@@ -381,6 +381,7 @@ impl Game<'_> {
         self.as_guest(host, conn, |g| {
             g.trigger_dimension(source, target, [from.x, from.y, from.z])
         });
+        self.native_player_changed_level(conn, source.id(), target.id());
         self.server_trips.push(Trip {
             conn,
             dim: target,
@@ -684,6 +685,7 @@ impl Game<'_> {
             host.hub
                 .change_level(i, t.at, yaw, Some(pitch), false, cooldown, &ctx);
             self.as_guest(host, t.conn, |g| g.trigger_dimension(source, t.dim, origin));
+            self.native_player_changed_level(t.conn, source.id(), t.dim.id());
             self.server_trips.retain(|trip| !trip.is(t.conn));
             self.server_trips.push(Trip {
                 conn: t.conn,

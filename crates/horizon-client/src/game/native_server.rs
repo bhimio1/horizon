@@ -489,6 +489,34 @@ impl Game<'_> {
         found.sort();
         found
     }
+    /// Play sound event `sound` (`minecraft:block.anvil.use`) at `pos` for the
+    /// players near it, as the game plays its own.
+    pub(super) fn native_play_sound(
+        &mut self,
+        sound: &str,
+        pos: [f64; 3],
+        volume: f32,
+        pitch: f32,
+    ) {
+        self.audio.play(sound, Some(pos), volume, pitch);
+    }
+    /// Show `count` particles of type `kind` (`minecraft:smoke`; types that
+    /// need more data aren't taken) around `pos`, spread up to `spread` on
+    /// each axis, to the players near it. False for an unknown type.
+    pub(super) fn native_particles(
+        &mut self,
+        kind: &str,
+        pos: [f64; 3],
+        count: u32,
+        spread: [f64; 3],
+    ) -> bool {
+        let Some(ty) = horizon_client::particles::ParticleType::from_name(kind) else {
+            return false;
+        };
+        let options = horizon_client::particles::ParticleOptions::simple(ty);
+        self.lan_send_particles(&options, pos, spread, 0.0, count);
+        true
+    }
     /// Answer the command being run (`native_command`), as its source's
     /// feedback: red when `error`. Outside a command it shows only in the
     /// window of the `Game` that runs it.

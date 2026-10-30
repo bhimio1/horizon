@@ -189,6 +189,26 @@
       "name": "command_syntax",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_command_syntax"
+    },
+    {
+      "name": "sleep",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_sleep"
+    },
+    {
+      "name": "player_changed_level",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_player_changed_level"
+    },
+    {
+      "name": "pick_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_pick_block"
+    },
+    {
+      "name": "mob_hurt",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_mob_hurt"
     }
   ]
 }

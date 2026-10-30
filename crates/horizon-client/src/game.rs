@@ -11639,6 +11639,12 @@ impl Game<'_> {
                 true,
             );
         }
+        // EntitySleepEvents.ALLOW_SLEEPING: vanilla's checks passed.
+        let mut allow = true;
+        self.native_sleep(head, &mut allow);
+        if !allow {
+            return;
+        }
         self.stop_mining();
         self.left = false;
         self.right = false;
