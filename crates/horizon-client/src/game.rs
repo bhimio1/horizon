@@ -161,6 +161,7 @@ mod native_lifecycle;
 mod native_panel;
 mod native_panel_recipes;
 mod native_recipes;
+mod native_server;
 mod native_shaders;
 mod natural_spawning;
 mod nautili;
@@ -1977,6 +1978,8 @@ struct Game<'a> {
     native_shaders: native_shaders::NativeShaders,
     /// The native lifecycle bookkeeping.
     native_lifecycle: native_lifecycle::NativeLifecycle,
+    /// The states native mods watch (`native_watch_block`), by id.
+    native_watched: Vec<bool>,
     /// Meshed sections waiting for an upload budget (Horizon settings).
     pending_uploads: Vec<((i32, i32, i32), horizon_client::mesher::SectionMesh)>,
     /// This frame's view frustum, for culling entities and block entities.
@@ -4560,6 +4563,21 @@ impl Game<'_> {
         let sneaking = self.keys.contains(&KeyCode::ShiftLeft);
         let hands_full = self.stack_in(self.selected).is_some() || self.offhand.is_some();
         let mut anchor_passed = false;
+        if let Some(hit) = block_hit {
+            let mut result = native_server::NativeUse::Pass;
+            let main_hand = self.hand == Hand::Main;
+            self.native_use_block(hit.pos, hit.face, main_hand, &mut result);
+            match result {
+                native_server::NativeUse::Pass => {}
+                native_server::NativeUse::Success => {
+                    self.swing_arm();
+                    return Ok(true);
+                }
+                native_server::NativeUse::Consume | native_server::NativeUse::Fail => {
+                    return Ok(true);
+                }
+            }
+        }
         // MultiPlayerGameMode.useItemOn: blocks react first.
         if !(sneaking && hands_full)
             && let Some(hit) = block_hit
@@ -5861,6 +5879,7 @@ impl Game<'_> {
     /// What the tick runs after the local player's own update: effects, the
     /// world's entities and blocks, and the network hub.
     fn tick_world(&mut self, running: bool) -> Result<()> {
+        self.native_level_tick(false, running);
         self.share_spawn_conditions();
         self.update_chunk_tickets();
         horizon_client::spans::time("tick_effects", || self.tick_effects(running));
@@ -5963,6 +5982,7 @@ impl Game<'_> {
             self.use_with_hand()?;
             self.use_delay = 4;
         }
+        self.native_level_tick(true, running);
         Ok(())
     }
     /// Keep the held-key state of toggled sneak and sprint in step with their mapping.
@@ -14766,6 +14786,7 @@ impl<'a> Game<'a> {
             panel: Default::default(),
             native_shaders: Default::default(),
             native_lifecycle: Default::default(),
+            native_watched: Vec::new(),
             sky_darken_memo: Default::default(),
             persist: Default::default(),
             remote: None,

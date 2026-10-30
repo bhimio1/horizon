@@ -6,6 +6,11 @@
 //! Horizon's own HUD extras do, and keep a mod's settings where the
 //! WebAssembly mod of the same id kept them.
 //!
+//! API 4 adds server events (`native_level_tick`, `native_use_block`,
+//! `native_block_changed`, `native_chunk`) and the world helpers of
+//! `native_server.rs`: what Fabric API's tick, interaction and chunk events
+//! give a mod (docs/fabric-parity.md).
+//!
 //! API 3 adds the world lifecycle hook (`native_world_lifecycle`).
 //!
 //! API 2 adds the item panel beside container screens and its recipe pages
@@ -22,6 +27,7 @@
 //! Bodies have no `cfg` and no macros: horizon-mixins refuses a target with
 //! either (`tests::hook_points_stay_hookable`).
 use super::native_lifecycle::{NativeLifecycleContext, WorldPhase};
+use super::native_server::NativeUse;
 use super::{Game, Screen, execution_role::ExecutionRole, native_panel_recipes::RecipePage};
 use horizon_client::{
     chat::ChatSource,
@@ -32,13 +38,14 @@ use horizon_client::{
     mod_list::{self, Installed, NativePage},
     text::Text,
 };
+use horizon_world::registry::BlockStateId;
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use winit::{event::MouseButton, keyboard::KeyCode};
 
 /// The hook points' API version. The launcher reads this line from the
 /// source it builds; keep its form.
 #[allow(dead_code)]
-pub(crate) const NATIVE_HOOKS_API: u32 = 3;
+pub(crate) const NATIVE_HOOKS_API: u32 = 4;
 
 /// The zoom a native mod asks for (`native_zoom`): the factor (1 is none),
 /// eased through the field of view like the spyglass when `smooth`, and the
@@ -333,6 +340,45 @@ impl Game<'_> {
     /// act on it when it is yours. API 2.
     pub(super) fn native_panel_event(&mut self, mod_id: &str, event: &NativePanelEvent) {
         let _ = (mod_id, event);
+    }
+    /// Before (`end` false) and after each level's tick, in the `Game`s
+    /// that simulate the world (single player's server, a LAN host, a
+    /// dedicated server; never a client of a server), each level in turn
+    /// (`native_level`). `running` is false while the world is frozen
+    /// (`/tick freeze`): blocks and entities stand still. API 4.
+    pub(super) fn native_level_tick(&mut self, end: bool, running: bool) {
+        let _ = (end, running);
+    }
+    /// A player uses block `pos` on its face `face` (a unit vector) with the
+    /// main hand or the off hand (`native_held`), sneaking or not
+    /// (`native_sneaking`), before the block or the item reacts. Set
+    /// `result` while it is `Pass`: any other value ends the click.
+    /// Where `native_level_tick` fires; spectators never get here. API 4.
+    pub(super) fn native_use_block(
+        &mut self,
+        pos: [i32; 3],
+        face: [i32; 3],
+        main_hand: bool,
+        result: &mut NativeUse,
+    ) {
+        let _ = (pos, face, main_hand, result);
+    }
+    /// A block at `pos` changed from `old` to `new`, one of them a state of
+    /// a block some mod watches (`native_watch_block`): each write, in
+    /// order, during the next tick of its level while the world runs. API 4.
+    pub(super) fn native_block_changed(
+        &mut self,
+        pos: [i32; 3],
+        old: BlockStateId,
+        new: BlockStateId,
+    ) {
+        let _ = (pos, old, new);
+    }
+    /// Chunk `chunk` (its x and z) of the level in place became resident
+    /// (`loaded`) or left; noticed within half a second while the world
+    /// runs. A chunk that left can no longer be read. API 4.
+    pub(super) fn native_chunk(&mut self, chunk: [i32; 2], loaded: bool) {
+        let _ = (chunk, loaded);
     }
 }
 
@@ -674,6 +720,50 @@ mod tests {
             for mac in ["!(", "![", "! {", "!{"] {
                 assert!(!line.contains(mac), "a macro in lifecycle source: {line}");
             }
+        }
+    }
+
+    #[test]
+    fn server_helpers_stay_hookable() {
+        let source = include_str!("native_server.rs");
+        for line in source.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            assert!(!line.contains("cfg"), "a cfg in server helpers: {line}");
+            for mac in ["!(", "![", "! {", "!{"] {
+                assert!(!line.contains(mac), "a macro in server helpers: {line}");
+            }
+        }
+    }
+
+    /// The API 4 events fire where their contracts say.
+    #[test]
+    fn server_events_fire_at_their_call_sites() {
+        let game = include_str!("../game.rs");
+        let tick = game.split("    fn tick_world(").nth(1).unwrap();
+        let tick = tick.split("\n    fn ").next().unwrap();
+        let start = tick
+            .find("self.native_level_tick(false, running);")
+            .unwrap();
+        let blocks = tick.find("self.tick_blocks()").unwrap();
+        let end = tick
+            .rfind("self.native_level_tick(true, running);")
+            .unwrap();
+        let sculk = tick.find("self.tick_sculk_blocks()").unwrap();
+        assert!(start < blocks && sculk < end);
+
+        let use_hand = game.split("    fn use_hand(").nth(1).unwrap();
+        let hook = use_hand.find("self.native_use_block(").unwrap();
+        let sneak = use_hand.find("if !(sneaking && hands_full)").unwrap();
+        assert!(hook < sneak, "the hook sees sneaking clicks too");
+
+        let sculk = include_str!("sculk.rs");
+        let sync = sculk.split("fn sculk_sync_index(").nth(1).unwrap();
+        let sync = sync.split("\n    fn ").next().unwrap();
+        for call in [
+            "self.native_chunk([key.0, key.1], true);",
+            "self.native_chunk([key.0, key.1], false);",
+            "self.native_block_changed(",
+        ] {
+            assert!(sync.contains(call), "missing: {call}");
         }
     }
 

@@ -64,6 +64,26 @@
       "name": "panel_event",
       "version": 1,
       "target": "horizon_client::game::native_hooks::Game<'_>::native_panel_event"
+    },
+    {
+      "name": "level_tick",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_level_tick"
+    },
+    {
+      "name": "use_block",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_use_block"
+    },
+    {
+      "name": "block_changed",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_block_changed"
+    },
+    {
+      "name": "chunk",
+      "version": 1,
+      "target": "horizon_client::game::native_hooks::Game<'_>::native_chunk"
     }
   ]
 }

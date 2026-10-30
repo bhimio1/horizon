@@ -42,6 +42,25 @@ mod shows one.
 API 3 adds authoritative world lifecycle events through `native_world_lifecycle`: open ready, open failed,
 and final close. Bundles that use these events need `"hooks": 3`.
 
+API 4 adds server events and world helpers, for mods with machines and blocks that react
+(`crates/horizon-client/src/game/native_server.rs`). They fire in the `Game`s that simulate the world (single
+player's server, a LAN host, a dedicated server), never in a client of a server:
+
+| Hook | When | Fabric API |
+|---|---|---|
+| `native_level_tick(end, running)` | before and after each level's tick; `running` is false under `/tick freeze` | `ServerTickEvents.START/END_WORLD_TICK` |
+| `native_use_block(pos, face, main_hand, result)` | a player uses a block, before it or the held item reacts; set `result` (`NativeUse`) to end the click | `UseBlockCallback` |
+| `native_block_changed(pos, old, new)` | a write to or from a state of a block a mod watches (`native_watch_block`), on the level's next tick | none (Fabric mods mixin into `setBlock`) |
+| `native_chunk(chunk, loaded)` | a chunk of the level became resident or left, within half a second | `ServerChunkEvents.CHUNK_LOAD/UNLOAD` |
+
+The helpers read and change the level in place (`native_level`, `native_world_dir`, `native_loaded`,
+`native_block`, `native_set_block`, `native_break_block`, `native_powered`), block states by name and property
+(`native_state_name`, `native_state_property`, `native_default_state`, `native_state_with`), dropped items
+(`native_items_in`, `native_update_item`, `native_spawn_item`, `native_max_stack`), cooking recipes
+(`native_cook`), the player acting now (`native_held`, `native_sneaking`), and a command's reply (`native_reply`). Bundles that use
+them need `"hooks": 4`. How the hook points compare with all of Fabric API and Fabric Loader:
+[fabric-parity.md](fabric-parity.md).
+
 ## What the launcher does
 
 In the window: install a native mod from the Mods page. The first one shows a notice once (the first build downloads
